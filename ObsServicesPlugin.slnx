@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/ObsServicesPlugin/ObsServicesPlugin.csproj" />
+  <Project Path="tests/ObsServicesPlugin.Tests/ObsServicesPlugin.Tests.csproj" />
+</Solution>
