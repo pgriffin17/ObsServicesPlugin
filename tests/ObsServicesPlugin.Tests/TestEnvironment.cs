@@ -6,8 +6,8 @@ using System.Windows;
 namespace ObsServicesPlugin.Tests {
     [SetUpFixture]
     public class TestEnvironment {
-        private string previousRoot;
-        public static string Root { get; private set; }
+        private string previousRoot = string.Empty;
+        public static string Root { get; private set; } = string.Empty;
         [OneTimeSetUp]
         public void Start() {
             previousRoot = CoreUtil.APPLICATIONTEMPPATH;

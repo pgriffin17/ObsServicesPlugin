@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Platform-neutral half of the plugin: the telescope_control agent protocol and runtime.
+       No N.I.N.A. or WPF references, so it builds and its tests run on Linux. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <UseWPF>false</UseWPF>
+    <Nullable>enable</Nullable>
+    <RootNamespace>ObsServices.Core</RootNamespace>
+    <AssemblyName>ObsServices.Core</AssemblyName>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+</Project>

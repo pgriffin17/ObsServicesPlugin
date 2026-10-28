@@ -16,6 +16,8 @@
   <ItemGroup>
     <PluginPackageFile Include="$(TargetPath)" Destination="$(TargetFileName)" />
     <PluginPackageFile Include="$(TargetDir)$(TargetName).pdb" Destination="$(TargetName).pdb" />
+    <PluginPackageFile Include="$(TargetDir)ObsServices.Core.dll" Destination="ObsServices.Core.dll" />
+    <PluginPackageFile Include="$(TargetDir)ObsServices.Core.pdb" Destination="ObsServices.Core.pdb" />
     <PluginPackageFile Include="$(PluginRoot)/LICENSE.txt" Destination="LICENSE.txt" />
   </ItemGroup>
   <Target Name="StagePlugin" DependsOnTargets="Build">

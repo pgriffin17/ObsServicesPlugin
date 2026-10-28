@@ -3,10 +3,15 @@
   <PropertyGroup>
     <RootNamespace>ObsServicesPlugin</RootNamespace>
     <AssemblyName>ObsServicesPlugin</AssemblyName>
+    <Nullable>enable</Nullable>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="NINA.Plugin" Version="$(NinaPackageVersion)" />
+    <!-- Same version N.I.N.A. ships; used for RelayCommand only and not packaged with the plugin. -->
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <!-- The platform-neutral agent/protocol half; ships inside the plugin package. -->
+    <ProjectReference Include="../ObsServices.Core/ObsServices.Core.csproj" />
   </ItemGroup>
   <Import Project="../../build/Plugin.targets" />
 </Project>

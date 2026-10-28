@@ -1,0 +1,55 @@
+<ResourceDictionary
+    x:Class="ObsServicesPlugin.Options"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="clr-namespace:ObsServicesPlugin">
+
+    <!-- N.I.N.A. shows the template keyed "<plugin title>_Options" on the plugin's page in Options > Plugins.
+         The key must equal the Title in Plugin.props followed by _Options; PluginTests checks that. -->
+    <DataTemplate x:Key="Obs Services Test Plugin_Options" DataType="{x:Type local:Plugin}">
+        <StackPanel Margin="0,10,0,0" Orientation="Vertical">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" MinWidth="180" />
+                    <ColumnDefinition Width="*" MaxWidth="520" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Service URL" />
+                <TextBox Grid.Row="0" Grid.Column="1" Margin="0,4" Text="{Binding ServiceUrl, UpdateSourceTrigger=LostFocus}" ToolTip="Where the observatory service runs, e.g. https://observatory.services" />
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Site id" />
+                <TextBox Grid.Row="1" Grid.Column="1" Margin="0,4" Text="{Binding SiteId, UpdateSourceTrigger=LostFocus}" ToolTip="The site this N.I.N.A. runs, as in the site's URL" />
+
+                <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Agent token" />
+                <TextBox Grid.Row="2" Grid.Column="1" Margin="0,4" Text="{Binding AgentToken, UpdateSourceTrigger=LostFocus}" ToolTip="Minted in the site's Agent tokens window (tca_…)" />
+
+                <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Instrument (optional)" />
+                <TextBox Grid.Row="3" Grid.Column="1" Margin="0,4" Text="{Binding Instrument, UpdateSourceTrigger=LostFocus}" ToolTip="Which of the site's instruments this N.I.N.A. drives; empty for the first" />
+
+                <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="State interval (s)" />
+                <TextBox Grid.Row="4" Grid.Column="1" Margin="0,4" Width="80" HorizontalAlignment="Left" Text="{Binding StateIntervalSeconds, UpdateSourceTrigger=LostFocus}" />
+
+                <TextBlock Grid.Row="5" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Roof open joint (mm)" />
+                <TextBox Grid.Row="5" Grid.Column="1" Margin="0,4" Width="80" HorizontalAlignment="Left" Text="{Binding RoofOpenJointValue, UpdateSourceTrigger=LostFocus}" ToolTip="Roof travel reported to the twin when the shutter is open" />
+
+                <CheckBox Grid.Row="6" Grid.Column="1" Margin="0,8,0,4" Content="Connect when N.I.N.A. starts" IsChecked="{Binding AutoConnect}" />
+            </Grid>
+
+            <StackPanel Margin="0,12,0,0" Orientation="Horizontal">
+                <Button MinWidth="110" Margin="0,0,8,0" Command="{Binding ConnectCommand}" Content="Connect" />
+                <Button MinWidth="110" Margin="0,0,16,0" Command="{Binding DisconnectCommand}" Content="Disconnect" />
+                <TextBlock VerticalAlignment="Center" FontWeight="Bold" Text="{Binding Status}" />
+            </StackPanel>
+            <TextBlock Margin="0,6,0,0" Opacity="0.8" Text="{Binding LastMessage}" TextWrapping="Wrap" />
+        </StackPanel>
+    </DataTemplate>
+</ResourceDictionary>

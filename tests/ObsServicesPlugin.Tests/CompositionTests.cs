@@ -24,6 +24,11 @@ namespace ObsServicesPlugin.Tests {
             profiles.SetupGet(p => p.ActiveProfile).Returns(profile.Object);
             container.ComposeExportedValue(profiles.Object);
             container.ComposeExportedValue(telescope.Object);
+            container.ComposeExportedValue(Mock.Of<ICameraMediator>());
+            container.ComposeExportedValue(Mock.Of<IImagingMediator>());
+            container.ComposeExportedValue(Mock.Of<IFilterWheelMediator>());
+            container.ComposeExportedValue(Mock.Of<IDomeMediator>());
+            container.ComposeExportedValue(Mock.Of<IFocuserMediator>());
             container.ComposeExportedValue(Mock.Of<IImageSaveMediator>());
             container.ComposeExportedValue(Mock.Of<IOptionsVM>());
             container.ComposeExportedValue(Mock.Of<IMessageBroker>());
@@ -66,7 +71,7 @@ namespace ObsServicesPlugin.Tests {
 
                 Assert.That(manifest, Is.InstanceOf<Plugin>());
 
-                await manifest.Initialize();
+                await manifest!.Initialize();
                 await manifest.Teardown();
             } catch (CompositionException ex) {
                 Assert.Fail(DescribeCompositionFailure(ex));
@@ -78,7 +83,7 @@ namespace ObsServicesPlugin.Tests {
             // NINA drag/drop behaviors require an Application and a main window.
             if (Application.Current == null) new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
             var grid = new System.Windows.Controls.Grid();
-            Application.Current.MainWindow = new Window { Content = grid };
+            Application.Current!.MainWindow = new Window { Content = grid };
             NameScope.SetNameScope(Application.Current.MainWindow, new NameScope());
             Application.Current.MainWindow.RegisterName("RootGrid", grid);
             foreach (var name in new[] { "ProfileService", "SVGDictionary", "Brushes", "Converters" }) {
@@ -87,7 +92,7 @@ namespace ObsServicesPlugin.Tests {
                 });
             }
             foreach (var type in typeof(Plugin).Assembly.GetTypes().Where(t => typeof(ResourceDictionary).IsAssignableFrom(t))) {
-                var dictionary = (ResourceDictionary)Activator.CreateInstance(type);
+                var dictionary = (ResourceDictionary)Activator.CreateInstance(type)!;
                 foreach (var template in dictionary.Values.OfType<DataTemplate>()) {
                     Assert.That(template.LoadContent(), Is.Not.Null, type.FullName);
                 }

@@ -2,7 +2,58 @@
 
 A plugin for NINA 3.3.0.1060 or later, targeting .NET 10. Metadata lives in Plugin.props. The plugin GUID is permanent.
 
-## Develop
+It makes a N.I.N.A. installation a **site agent** of the telescope_control service (observatory.services): the
+plugin connects outbound to `/ws/agent/{site}`, publishes mount, camera and roof state to the site's entities,
+and carries out the observation tasks the service assigns through N.I.N.A.'s own equipment mediators.
+
+## Layout
+
+```
+src/ObsServices.Core          net10.0, no N.I.N.A. or WPF: the agent protocol (Protocol/), channel names and
+                              derived entity ids (Channels.cs), sidereal-time helpers (Astro.cs), the agent
+                              runtime (Agent/SiteAgent.cs: socket, reconnect, backlog replay, state cadence,
+                              task dispatch, command acks), the device interfaces a host implements (Devices/)
+                              and the generic agent that drives them (Agent/ObservatoryAgent.cs: manifest
+                              binding, telemetry mapping, task execution, commands). Builds and tests anywhere.
+src/ObsServicesPlugin         net10.0-windows: the N.I.N.A. plugin. Plugin.cs is the manifest and agent host (settings,
+                              connect/disconnect, options page in Options.xaml); Nina/ implements the core's device
+                              interfaces over N.I.N.A.'s mediators (mount, camera + image save pipeline, filter wheel,
+                              dome shutter as roof, focuser). Runs on Windows only.
+tests/ObsServices.Core.Tests  protocol/astro unit tests plus an integration test that starts the real
+                              telescope_control server and drives a software site through the protocol.
+tests/ObsServicesPlugin.Tests N.I.N.A.-hosted tests; need the Windows desktop runtime.
+```
+
+## How it fits together
+
+1. In N.I.N.A., Options > Plugins > this plugin: enter the service URL, the site id and an agent token from the
+   site's *Agent tokens* window, then Connect (or tick *Connect when N.I.N.A. starts*). Settings are per profile.
+2. The plugin opens the agent socket. The service answers with the site's manifest; the agent binds the chosen
+   instrument's mount and camera, the filter wheel and focuser mated under that mount, and the first roof.
+3. Every state interval it publishes what N.I.N.A.'s mediators report: the mount's hour angle and declination
+   (the twin's joints), mode, sky RA, camera state and temperature, filter, focus position, shutter state.
+4. Tasks the service assigns run through N.I.N.A.: open the shutter, unpark, slew (J2000 in, N.I.N.A. transforms),
+   change filter, expose through the imaging mediator and the normal image save pipeline, report frames and
+   progress on the task entity. Cancel aborts the exposure. Commands stop, park, unpark, open/close roof and
+   safe map to the matching mediator calls; `set_time_scale` is acked as unsupported.
+
+## Develop on Linux
+
+N.I.N.A. is WPF and does not run on Linux, but every project here compiles on Linux and the core tests run
+there. `scripts/build.sh` wraps the official .NET 10 SDK container, so nothing needs installing beyond Docker:
+
+```bash
+scripts/build.sh build        # restore + build all four projects
+scripts/build.sh test         # core unit tests + the integration test against telescope_control
+scripts/build.sh shell        # a shell with the repo at /src
+```
+
+The integration test looks for `../telescope_control/target/debug/telescope-server` and `../telescope_control/library`
+(override with `TELESCOPE_CONTROL`, or `TELESCOPE_SERVER_BIN` / `TELESCOPE_LIBRARY` inside the container) and skips
+with a reason when they are missing. Build the server once with `cargo build -p telescope-server` in that checkout.
+The N.I.N.A.-hosted tests under `tests/ObsServicesPlugin.Tests` compile here but only run on Windows.
+
+## Develop on Windows
 
 Install the .NET 10.0.4xx SDK and PowerShell 7 on Windows. Open ObsServicesPlugin.slnx in a compatible Visual Studio 2026 installation or use the CLI.
 
