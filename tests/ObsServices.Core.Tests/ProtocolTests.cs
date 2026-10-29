@@ -178,4 +178,22 @@ public class AstroTests {
         Assert.That(Astro.RaDeg(100, Astro.HourAngleDeg(100, 250)), Is.EqualTo(250).Within(1e-12));
         Assert.That(Astro.HoursToDeg(5.588), Is.EqualTo(83.82).Within(1e-12));
     }
+
+    [Test]
+    public void GermanEquatorialAxesFlipThroughThePoleAndRoundTrip() {
+        // normal pose: axis angles are the sky pose
+        Assert.That(Astro.GemAxes(30.0, 20.0, tubeWest: false), Is.EqualTo((30.0, 20.0)));
+        // flipped pose: both axes through 180°, as the service's virtual agent does
+        var (raAxis, decAxis) = Astro.GemAxes(-3.0, 20.0, tubeWest: true);
+        Assert.That(raAxis, Is.EqualTo(177.0).Within(1e-9));
+        Assert.That(decAxis, Is.EqualTo(160.0).Within(1e-9));
+        Assert.That(Astro.GemSky(raAxis, decAxis), Is.EqualTo((-3.0, 20.0, true)));
+        Assert.That(Astro.GemSky(30.0, 20.0), Is.EqualTo((30.0, 20.0, false)));
+        // southern sky in the flipped pose goes past -90
+        var south = Astro.GemAxes(100.0, -40.0, tubeWest: true);
+        Assert.That(south.DecAxisDeg, Is.EqualTo(-140.0).Within(1e-9));
+        Assert.That(Astro.GemSky(south.RaAxisDeg, south.DecAxisDeg).DecDeg, Is.EqualTo(-40.0).Within(1e-9));
+        Assert.That(Astro.Wrap180(180.0), Is.EqualTo(180.0));
+        Assert.That(Astro.Wrap180(181.0), Is.EqualTo(-179.0));
+    }
 }

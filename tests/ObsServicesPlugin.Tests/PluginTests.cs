@@ -64,6 +64,18 @@ namespace ObsServicesPlugin.Tests {
         }
 
         [Test]
+        public void TelemetryOnlyIsTheDefaultAndPersists() {
+            var plugin = Create();
+            Assert.That(plugin.TelemetryOnly, Is.True, "a fresh install never accepts remote control");
+            Assert.That(plugin.ModeDescription, Does.StartWith("Telemetry only"));
+
+            plugin.TelemetryOnly = false;
+
+            Assert.That(Create().TelemetryOnly, Is.False);
+            Assert.That(plugin.ModeDescription, Does.StartWith("Full control"));
+        }
+
+        [Test]
         public async Task ConnectWithoutConfigurationReportsInsteadOfStarting() {
             var plugin = Create();
 
@@ -114,10 +126,13 @@ namespace ObsServicesPlugin.Tests {
                 Altitude = 40.0,
                 Azimuth = 170.0,
                 Coordinates = new Coordinates(Angle.ByHours(5.5), Angle.ByDegree(-5.4), Epoch.J2000),
+                SideOfPier = NINA.Core.Enum.PierSide.pierWest,
             });
             var mount = new NinaMount(mediator.Object);
 
             var r = mount.Read();
+
+            Assert.That(r.PierSide, Is.EqualTo(PierSide.West));
 
             Assert.That(r.Connected, Is.True);
             Assert.That(r.State, Is.EqualTo(MountState.Tracking));
@@ -138,6 +153,8 @@ namespace ObsServicesPlugin.Tests {
             Assert.That(mount.Read().State, Is.EqualTo(MountState.Parked));
             info = new TelescopeInfo { Connected = true, TrackingEnabled = true, Slewing = true };
             Assert.That(mount.Read().State, Is.EqualTo(MountState.Slewing));
+            info = new TelescopeInfo { Connected = true, SideOfPier = NINA.Core.Enum.PierSide.pierUnknown };
+            Assert.That(mount.Read().PierSide, Is.EqualTo(PierSide.Unknown));
             info = new TelescopeInfo { Connected = false };
             Assert.That(mount.Read(), Is.EqualTo(MountReading.Disconnected));
         }

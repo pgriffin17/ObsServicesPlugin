@@ -43,6 +43,33 @@ public static class Astro {
     /// <summary>Hours to degrees (right ascension is often reported in hours).</summary>
     public static double HoursToDeg(double hours) => hours * 15.0;
 
+    /// <summary>
+    /// Axis angles of a German equatorial for a sky pose. The normal pose (tube east of the pier,
+    /// the library convention) is (ha, dec); the flipped pose turns both axes through 180° and
+    /// carries the tube west. Same rule as the service's virtual agent.
+    /// </summary>
+    public static (double RaAxisDeg, double DecAxisDeg) GemAxes(double hourAngleDeg, double decDeg, bool tubeWest) =>
+        tubeWest ? (Wrap180(hourAngleDeg + 180.0), Wrap180(180.0 - decDeg)) : (Wrap180(hourAngleDeg), decDeg);
+
+    /// <summary>Sky pose and side from axis angles: a dec axis beyond ±90° is the flipped pose.</summary>
+    public static (double HourAngleDeg, double DecDeg, bool TubeWest) GemSky(double raAxisDeg, double decAxisDeg) {
+        if (decAxisDeg > 90.0) {
+            return (Wrap180(raAxisDeg - 180.0), 180.0 - decAxisDeg, true);
+        }
+
+        if (decAxisDeg < -90.0) {
+            return (Wrap180(raAxisDeg - 180.0), -180.0 - decAxisDeg, true);
+        }
+
+        return (raAxisDeg, decAxisDeg, false);
+    }
+
+    /// <summary>Into (-180, 180].</summary>
+    public static double Wrap180(double deg) {
+        var w = Wrap360(deg);
+        return w > 180.0 ? w - 360.0 : w;
+    }
+
     /// <summary>Euclidean remainder into [0, 360).</summary>
     public static double Wrap360(double deg) {
         var r = deg % 360.0;

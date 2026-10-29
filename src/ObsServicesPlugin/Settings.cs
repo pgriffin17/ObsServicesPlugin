@@ -41,6 +41,15 @@ public sealed class Settings {
         set => options.SetValueString(nameof(Instrument), (value ?? string.Empty).Trim());
     }
 
+    /// <summary>
+    /// Publish telemetry but accept no tasks or commands from the service. On by default: a fresh
+    /// install never hands control of the rig to anyone until this is switched off.
+    /// </summary>
+    public bool TelemetryOnly {
+        get => options.GetValueBoolean(nameof(TelemetryOnly), true);
+        set => options.SetValueBoolean(nameof(TelemetryOnly), value);
+    }
+
     /// <summary>Connect to the service as soon as N.I.N.A. has loaded the plugin.</summary>
     public bool AutoConnect {
         get => options.GetValueBoolean(nameof(AutoConnect), false);

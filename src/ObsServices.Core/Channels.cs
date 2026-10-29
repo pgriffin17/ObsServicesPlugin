@@ -19,6 +19,15 @@ public static class Channels {
     /// <summary>Sky right ascension the mount is on, degrees. Informational: the <c>ra</c> joint is the hour angle.</summary>
     public const string MountRaDeg = "ra_deg";
 
+    /// <summary>Sky declination the mount is on, degrees. The <c>dec</c> joint is the axis angle, which is past ±90° on a flipped German equatorial.</summary>
+    public const string MountDecDeg = "dec_deg";
+
+    /// <summary>German equatorials: <c>east</c> (normal pose, dec axis within ±90°) | <c>west</c> (flipped, both axes through 180°).</summary>
+    public const string MountPierSide = "pier_side";
+
+    public const string PierEast = "east";
+    public const string PierWest = "west";
+
     /// <summary>Where the mount is aimed, altitude (used for the reticle when no optics are declared).</summary>
     public const string MountTargetAltDeg = "target_alt_deg";
 

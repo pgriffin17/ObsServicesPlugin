@@ -35,6 +35,9 @@ public sealed class FakeMount : IMountDevice {
 
     public double SlewDegPerSecond { get; set; } = 4.0;
 
+    /// <summary>What the driver reports; East (the normal pose) unless a test says otherwise.</summary>
+    public PierSide PierSide { get; set; } = PierSide.East;
+
     public List<string> Calls { get; } = new();
 
     private double Lst => Astro.LstDeg(Protocol.Timestamp.Now(), lonDeg);
@@ -54,7 +57,7 @@ public sealed class FakeMount : IMountDevice {
 
             var ra = Astro.RaDeg(lst, ha);
             var (alt, az) = Astro.AltAz(ha, dec, latDeg);
-            return new MountReading(true, state, lst, ra, dec, ra, dec, alt, az);
+            return new MountReading(true, state, lst, ra, dec, ra, dec, alt, az, PierSide);
         }
     }
 

@@ -42,7 +42,12 @@ public sealed class NinaMount : IMountDevice {
 
         double? alt = double.IsNaN(info.Altitude) ? null : info.Altitude;
         double? az = double.IsNaN(info.Azimuth) ? null : info.Azimuth;
-        return new MountReading(true, state, lst, ra, dec, raJ2000, decJ2000, alt, az);
+        var pierSide = info.SideOfPier switch {
+            NINA.Core.Enum.PierSide.pierEast => PierSide.East,
+            NINA.Core.Enum.PierSide.pierWest => PierSide.West,
+            _ => PierSide.Unknown,
+        };
+        return new MountReading(true, state, lst, ra, dec, raJ2000, decJ2000, alt, az, pierSide);
     }
 
     public async Task SlewAsync(double raJ2000Deg, double decJ2000Deg, CancellationToken cancellationToken) {

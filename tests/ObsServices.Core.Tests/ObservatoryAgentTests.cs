@@ -112,11 +112,56 @@ public class ObservatoryAgentStateTests {
         Assert.That(tracking.State["shed"]["state"].AsText(), Is.EqualTo("open"));
         Assert.That(tracking.State["shed"]["roof"].AsDouble(), Is.EqualTo(2400));
 
+        Assert.That(tracking.State["m"]["dec_deg"].AsDouble(), Is.EqualTo(89.26).Within(1e-9), "sky declination beside the joint");
+        Assert.That(tracking.State["m"].ContainsKey("pier_side"), Is.False, "a fork mount has no pier side");
+
         mount.Connected = false;
         camera.Connected = false;
         var offline = (await agent.Sample())!;
         Assert.That(offline.State.ContainsKey("m"), Is.False, "disconnected devices publish nothing");
         Assert.That(offline.State.ContainsKey("cam"), Is.False);
         Assert.That(offline.State.ContainsKey("shed"), Is.True);
+    }
+
+    [Test]
+    public async Task GermanEquatorialJointsFollowThePierSide() {
+        var clock = new FakeClock();
+        var mount = new FakeMount(clock, 37.8, -122.3);
+        var agent = new Probe(new DeviceSet { Mount = mount });
+        await agent.Bind(new Manifest {
+            Entities = {
+                new Entity { Id = "g", Kind = EntityKind.Component, Instance = "gem", Properties = {
+                    new PropertyInfo { Name = "ra", Joint = "ra" }, new PropertyInfo { Name = "dec", Joint = "dec" },
+                    PropertyInfo.Text("pier_side", new[] { "east", "west" }) } },
+            },
+            Instruments = { new InstrumentInfo { Id = "g", Mount = "g" } },
+        });
+        Assert.That(agent.Binding.IsGermanEquatorial, Is.True);
+        await mount.UnparkAsync(default);
+        await mount.SlewAsync(37.95, 20.0, default);
+        var reading = mount.Read();
+        var ha = Astro.HourAngleDeg(reading.SiderealTimeDeg!.Value, 37.95);
+
+        // the driver says east: the normal pose, joints are the sky pose
+        mount.PierSide = PierSide.East;
+        var east = (await agent.Sample())!.State["g"];
+        Assert.That(east["pier_side"].AsText(), Is.EqualTo("east"));
+        Assert.That(east["ra"].AsDouble(), Is.EqualTo(Astro.Wrap180(ha)).Within(0.01));
+        Assert.That(east["dec"].AsDouble(), Is.EqualTo(20.0).Within(1e-6));
+        Assert.That(east["dec_deg"].AsDouble(), Is.EqualTo(20.0).Within(1e-6));
+
+        // the driver says west: both axes through 180°, the twin carries the tube west of the pier
+        mount.PierSide = PierSide.West;
+        var west = (await agent.Sample())!.State["g"];
+        Assert.That(west["pier_side"].AsText(), Is.EqualTo("west"));
+        Assert.That(west["ra"].AsDouble(), Is.EqualTo(Astro.Wrap180(ha + 180.0)).Within(0.01));
+        Assert.That(west["dec"].AsDouble(), Is.EqualTo(160.0).Within(1e-6));
+        Assert.That(west["dec_deg"].AsDouble(), Is.EqualTo(20.0).Within(1e-6), "sky declination unchanged");
+        Assert.That(Astro.GemSky(west["ra"].AsDouble()!.Value, west["dec"].AsDouble()!.Value).DecDeg, Is.EqualTo(20.0).Within(1e-6));
+
+        // the driver cannot say: the usual choice, flipped while east of the meridian
+        mount.PierSide = PierSide.Unknown;
+        var guessed = (await agent.Sample())!.State["g"];
+        Assert.That(guessed["pier_side"].AsText(), Is.EqualTo(ha < 0 ? "west" : "east"));
     }
 }

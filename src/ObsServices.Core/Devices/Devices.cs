@@ -13,6 +13,16 @@ public enum MountState {
     Stopped,
 }
 
+/// <summary>
+/// Which side of the pier the tube is on, for German equatorials. Same meaning as ASCOM's
+/// SideOfPier: East is the normal pose (used west of the meridian), West the flipped pose.
+/// </summary>
+public enum PierSide {
+    Unknown,
+    East,
+    West,
+}
+
 /// <summary>What a mount reports right now. Nulls mean "not available".</summary>
 public sealed record MountReading(
     bool Connected,
@@ -27,7 +37,9 @@ public sealed record MountReading(
     double? RightAscensionJ2000Deg,
     double? DeclinationJ2000Deg,
     double? AltitudeDeg,
-    double? AzimuthDeg) {
+    double? AzimuthDeg,
+    /// <summary>German equatorials: which side the tube is on. Unknown for other mounts or when the driver cannot say.</summary>
+    PierSide PierSide = PierSide.Unknown) {
     public static readonly MountReading Disconnected = new(false, MountState.Disconnected, null, null, null, null, null, null, null);
 }
 

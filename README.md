@@ -28,14 +28,27 @@ tests/ObsServicesPlugin.Tests N.I.N.A.-hosted tests; need the Windows desktop ru
 
 1. In N.I.N.A., Options > Plugins > this plugin: enter the service URL, the site id and an agent token from the
    site's *Agent tokens* window, then Connect (or tick *Connect when N.I.N.A. starts*). Settings are per profile.
+   The plugin starts in **telemetry only** mode: the service sees the rig but tasks come back as `skipped` and
+   commands are refused in their ack. Untick it to allow remote observations and commands; the switch is live.
 2. The plugin opens the agent socket. The service answers with the site's manifest; the agent binds the chosen
    instrument's mount and camera, the filter wheel and focuser mated under that mount, and the first roof.
-3. Every state interval it publishes what N.I.N.A.'s mediators report: the mount's hour angle and declination
-   (the twin's joints), mode, sky RA, camera state and temperature, filter, focus position, shutter state.
+3. Every state interval it publishes what N.I.N.A.'s mediators report: the mount's axis angles (the twin's
+   joints: hour angle and declination, or on a German equatorial the flipped pose past the pole when N.I.N.A.
+   reports the tube west of the pier), `pier_side`, mode, sky RA and Dec, camera state and temperature, filter,
+   focus position, shutter state.
 4. Tasks the service assigns run through N.I.N.A.: open the shutter, unpark, slew (J2000 in, N.I.N.A. transforms),
    change filter, expose through the imaging mediator and the normal image save pipeline, report frames and
    progress on the task entity. Cancel aborts the exposure. Commands stop, park, unpark, open/close roof and
    safe map to the matching mediator calls; `set_time_scale` is acked as unsupported.
+
+## When the service is unreachable
+
+The agent retries forever: a failed or dropped connection is retried after 1 s, doubling to a cap of 60 s, and a
+successful connect resets the pause. A handshake that stalls is abandoned after 15 s; an unanswered WebSocket ping
+closes a half-open connection after 30 s. The reason for the last failure, including the HTTP status of a refused
+token, is in the plugin's status line and N.I.N.A.'s log. State keeps being sampled through an outage and up to
+20,000 messages are replayed with their original timestamps once the service is back, so the site's history has no
+gap. Running tasks continue locally and report their outcome on reconnect.
 
 ## Develop on Linux
 

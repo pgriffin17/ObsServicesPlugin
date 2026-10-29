@@ -27,6 +27,7 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
     private readonly IDeviceSet devices;
     private readonly object gate = new();
     private NinaSiteAgent? agent;
+    private ObservatoryAgentOptions? agentOptions;
     private Task? runner;
     private CancellationTokenSource? runCts;
     private string status = "Disconnected";
@@ -99,6 +100,27 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
         set { Settings.AutoConnect = value; Raise(); }
     }
 
+    /// <summary>Takes effect immediately, also on a running agent.</summary>
+    public bool TelemetryOnly {
+        get => Settings.TelemetryOnly;
+        set {
+            Settings.TelemetryOnly = value;
+
+            lock (gate) {
+                if (agentOptions != null) {
+                    agentOptions.TelemetryOnly = value;
+                }
+            }
+
+            Raise();
+            Raise(nameof(ModeDescription));
+        }
+    }
+
+    public string ModeDescription => TelemetryOnly
+        ? "Telemetry only: the service sees this rig but cannot move it. Tasks are skipped, commands refused."
+        : "Full control: the service may assign observations and send stop, park, unpark, roof and safe commands.";
+
     public double StateIntervalSeconds {
         get => Settings.StateIntervalSeconds;
         set { Settings.StateIntervalSeconds = value; Raise(); }
@@ -141,12 +163,14 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
             var options = new ObservatoryAgentOptions {
                 InstrumentKey = string.IsNullOrWhiteSpace(Settings.Instrument) ? null : Settings.Instrument,
                 RoofOpenJointValue = Settings.RoofOpenJointValue,
+                TelemetryOnly = Settings.TelemetryOnly,
             };
             var a = new NinaSiteAgent(Settings.ServiceUrl, Settings.SiteId, Settings.AgentToken, devices, options, Version?.ToString() ?? "0.0.0.0") {
                 StateInterval = TimeSpan.FromSeconds(Settings.StateIntervalSeconds),
             };
             a.Logged += (level, message) => LastMessage = $"{level}: {message}";
             runCts = new CancellationTokenSource();
+            agentOptions = options;
             agent = a;
             runner = Task.Run(() => RunAgentAsync(a, runCts.Token));
         }
@@ -176,6 +200,7 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
         lock (gate) {
             runner = null;
             agent = null;
+            agentOptions = null;
             runCts?.Dispose();
             runCts = null;
         }
@@ -221,7 +246,7 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
         Settings = new Settings(profiles, Guid.Parse(Identifier));
         Raise(nameof(Settings));
 
-        foreach (var name in new[] { nameof(ServiceUrl), nameof(SiteId), nameof(AgentToken), nameof(Instrument), nameof(AutoConnect), nameof(StateIntervalSeconds), nameof(RoofOpenJointValue) }) {
+        foreach (var name in new[] { nameof(ServiceUrl), nameof(SiteId), nameof(AgentToken), nameof(Instrument), nameof(AutoConnect), nameof(TelemetryOnly), nameof(ModeDescription), nameof(StateIntervalSeconds), nameof(RoofOpenJointValue) }) {
             Raise(name);
         }
 

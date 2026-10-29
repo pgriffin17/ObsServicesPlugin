@@ -46,6 +46,25 @@ public abstract class SiteAgent {
     /// <summary>Longest pause between reconnection attempts (doubles from one second).</summary>
     public TimeSpan ReconnectMax { get; set; } = TimeSpan.FromSeconds(60);
 
+    /// <summary>Give up on a handshake that has not completed in this long and retry.</summary>
+    public TimeSpan ConnectTimeout { get; set; } = TimeSpan.FromSeconds(15);
+
+    /// <summary>WebSocket ping cadence; the service answers with pongs.</summary>
+    public TimeSpan KeepAliveInterval { get; set; } = TimeSpan.FromSeconds(20);
+
+    /// <summary>
+    /// A ping unanswered for this long closes the socket and triggers a reconnect, so a half-open
+    /// connection (cable pulled, NAT entry gone) is noticed within about a minute instead of whenever
+    /// TCP gives up.
+    /// </summary>
+    public TimeSpan KeepAliveTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>Why the last connection attempt or session ended, for status displays. Null while healthy.</summary>
+    public string? LastError { get; private set; }
+
+    /// <summary>Connection attempts that failed since the last successful one.</summary>
+    public int ConsecutiveFailures { get; private set; }
+
     /// <summary>Telemetry messages kept for replay while the service is unreachable.</summary>
     public int BacklogLimit { get; set; } = 20_000;
 
@@ -114,6 +133,16 @@ public abstract class SiteAgent {
     protected virtual Task OnManifestAsync(Manifest manifest, CancellationToken cancellationToken) => Task.CompletedTask;
 
     /// <summary>
+    /// Decide whether to take a task at all, before it is reported running. Return false with a
+    /// reason to have it reported as <c>skipped</c> (the service hands it to another agent or leaves
+    /// it to the operator). Default: accept everything.
+    /// </summary>
+    protected virtual bool AcceptTask(ObservationTask task, out string? reason) {
+        reason = null;
+        return true;
+    }
+
+    /// <summary>
     /// Carry out one observation. Return normally for <c>completed</c>; throw for <c>failed</c>;
     /// watch <see cref="TaskHandle.Cancelled"/> and return (or throw <see cref="OperationCanceledException"/>)
     /// when it fires, which is reported as <c>cancelled</c>.
@@ -142,15 +171,34 @@ public abstract class SiteAgent {
         var ct = linked.Token;
         var delay = TimeSpan.FromSeconds(1);
         var uri = new Uri(WebSocketUrl());
+        // Sampling runs for the agent's whole life, not per session: during an outage the readings
+        // go into the backlog and the site's history has no hole once the service is back.
+        var publisher = PublishLoopAsync(ct);
 
         while (!ct.IsCancellationRequested) {
+            using var ws = new ClientWebSocket();
+
             try {
-                using var ws = new ClientWebSocket();
                 ws.Options.SetRequestHeader("Authorization", $"Bearer {Token}");
-                ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
-                await ws.ConnectAsync(uri, ct).ConfigureAwait(false);
+                ws.Options.KeepAliveInterval = KeepAliveInterval;
+                ws.Options.KeepAliveTimeout = KeepAliveTimeout;
+                ws.Options.CollectHttpResponseDetails = true;
+
+                using (var handshake = CancellationTokenSource.CreateLinkedTokenSource(ct)) {
+                    handshake.CancelAfter(ConnectTimeout);
+
+                    try {
+                        await ws.ConnectAsync(uri, handshake.Token).ConfigureAwait(false);
+                    } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
+                        throw new TimeoutException($"no handshake within {ConnectTimeout.TotalSeconds:0}s");
+                    }
+                }
+
                 delay = TimeSpan.FromSeconds(1);
+                ConsecutiveFailures = 0;
+                LastError = null;
                 await SessionAsync(ws, ct).ConfigureAwait(false);
+                LastError = "connection closed by the service";
             } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
                 break;
             } catch (Exception e) {
@@ -161,7 +209,9 @@ public abstract class SiteAgent {
                     break;
                 }
 
-                Log(Level.Warn, $"agent socket: {e.Message}; reconnecting in {delay.TotalSeconds:0}s", e);
+                ConsecutiveFailures++;
+                LastError = DescribeFailure(ws, e);
+                Log(Level.Warn, $"agent socket: {LastError}; reconnecting in {delay.TotalSeconds:0}s", e);
 
                 try {
                     await Task.Delay(delay, ct).ConfigureAwait(false);
@@ -176,12 +226,34 @@ public abstract class SiteAgent {
         Connected.Reset();
         socket = null;
         await CancelAllAsync().ConfigureAwait(false);
+
+        try {
+            await publisher.ConfigureAwait(false);
+        } catch (OperationCanceledException) {
+        }
     }
 
     /// <summary>Ask <see cref="RunAsync"/> to return. Running tasks see their <see cref="TaskHandle.Cancelled"/> fire.</summary>
     public void Stop() => stopping.Cancel();
 
     public bool IsStopping => stopping.IsCancellationRequested;
+
+    /// <summary>A refused handshake names its HTTP status, so a bad token reads differently from a down server.</summary>
+    private static string DescribeFailure(ClientWebSocket ws, Exception e) {
+        var status = ws.HttpStatusCode;
+
+        if (status != 0) {
+            var hint = (int)status switch {
+                401 => " (the agent token was refused: mint a new one for this site)",
+                403 => " (forbidden)",
+                404 => " (no such site)",
+                _ => string.Empty,
+            };
+            return $"service answered {(int)status} {status}{hint}";
+        }
+
+        return e.Message;
+    }
 
     private string WebSocketUrl() {
         var ws = BaseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ? "wss://" + BaseUrl[8..]
@@ -209,8 +281,6 @@ public abstract class SiteAgent {
         }
 
         Connected.Set();
-        using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var publisher = PublishLoopAsync(sessionCts.Token);
 
         try {
             var buffer = new ArraySegment<byte>(new byte[64 * 1024]);
@@ -251,14 +321,8 @@ public abstract class SiteAgent {
                 await DispatchAsync(message, ct).ConfigureAwait(false);
             }
         } finally {
-            sessionCts.Cancel();
             Connected.Reset();
             socket = null;
-
-            try {
-                await publisher.ConfigureAwait(false);
-            } catch (OperationCanceledException) {
-            }
         }
     }
 
@@ -430,6 +494,18 @@ public abstract class SiteAgent {
 
         try {
             await Ready.WaitAsync(handle.Cancelled).ConfigureAwait(false);
+
+            if (!AcceptTask(handle.Task, out var reason)) {
+                await PublishAsync(StateMsg.TaskUpdate(id, ObservationStatus.Skipped, null, reason ?? "declined by the agent", Now())).ConfigureAwait(false);
+
+                lock (gate) {
+                    tasks.Remove(id);
+                }
+
+                handle.Cancellation.Dispose();
+                return;
+            }
+
             await PublishAsync(StateMsg.TaskUpdate(id, ObservationStatus.Running, 0.0, "starting", Now())).ConfigureAwait(false);
             await RunTaskAsync(handle).ConfigureAwait(false);
             (status, message) = handle.IsCancelled ? (ObservationStatus.Cancelled, "cancelled") : (ObservationStatus.Completed, "done");

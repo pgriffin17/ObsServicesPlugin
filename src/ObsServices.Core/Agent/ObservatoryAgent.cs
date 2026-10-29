@@ -3,9 +3,16 @@ using ObsServices.Core.Protocol;
 
 namespace ObsServices.Core.Agent;
 
+/// <summary>Settings of the generic agent. Read on use, so a host may change them while the agent runs.</summary>
 public sealed class ObservatoryAgentOptions {
     /// <summary>Instrument to drive: id, name or mount instance name. Null means the site's first.</summary>
     public string? InstrumentKey { get; set; }
+
+    /// <summary>
+    /// Publish state but never act: tasks are reported back as <c>skipped</c> and commands are
+    /// refused in their ack, with the reason. The safe default for a host that watches real hardware.
+    /// </summary>
+    public bool TelemetryOnly { get; set; }
 
     /// <summary>Joint value published for the roof joints when the roof is open (millimetres of travel).</summary>
     public double RoofOpenJointValue { get; set; } = 2400;
@@ -33,7 +40,19 @@ public class ObservatoryAgent : SiteAgent {
         this.devices = devices;
         this.options = options ?? new ObservatoryAgentOptions();
         Capabilities.AddRange(new[] { "mount", "camera", "roof" });
+
+        if (this.options.TelemetryOnly) {
+            Capabilities.Add(TelemetryOnlyCapability);
+        }
     }
+
+    /// <summary>Advertised in <c>hello</c> when the agent starts in telemetry-only mode.</summary>
+    public const string TelemetryOnlyCapability = "telemetry_only";
+
+    public const string TelemetryOnlyReason = "agent is in telemetry-only mode";
+
+    /// <summary>Live view of the option; hosts toggle it through the options object they passed in.</summary>
+    public bool TelemetryOnly => options.TelemetryOnly;
 
     /// <summary>How the manifest was bound to the devices; empty until <c>welcome</c>.</summary>
     public SiteBinding Binding { get; private set; } = SiteBinding.Empty;
@@ -118,8 +137,27 @@ public class ObservatoryAgent : SiteAgent {
                 m.Set(entity, b.DecJoint, alt);
             }
         } else if (mount.SiderealTimeDeg is { } lst && mount.RightAscensionDeg is { } ra && mount.DeclinationDeg is { } dec) {
-            m.Set(entity, b.HaJoint, Astro.HourAngleDeg(lst, ra));
-            m.Set(entity, b.DecJoint, dec);
+            var ha = Astro.HourAngleDeg(lst, ra);
+
+            if (b.IsGermanEquatorial) {
+                // The joints are axis angles: the flipped pose turns both through 180°. Trust the
+                // driver's side; when it cannot say, assume the usual choice (eastern targets on the
+                // west side, so flipped while east of the meridian).
+                var tubeWest = mount.PierSide switch {
+                    PierSide.West => true,
+                    PierSide.East => false,
+                    _ => ha < 0.0,
+                };
+                var (raAxis, decAxis) = Astro.GemAxes(ha, dec, tubeWest);
+                m.Set(entity, b.HaJoint, raAxis);
+                m.Set(entity, b.DecJoint, decAxis);
+                m.Set(entity, Channels.MountPierSide, tubeWest ? Channels.PierWest : Channels.PierEast);
+            } else {
+                m.Set(entity, b.HaJoint, ha);
+                m.Set(entity, b.DecJoint, dec);
+            }
+
+            m.Set(entity, Channels.MountDecDeg, mount.DeclinationJ2000Deg ?? dec);
         }
 
         if (mount.RightAscensionJ2000Deg is { } raJ2000) {
@@ -146,6 +184,15 @@ public class ObservatoryAgent : SiteAgent {
     }
 
     // ---- tasks ------------------------------------------------------------------------------------
+
+    protected override bool AcceptTask(ObservationTask task, out string? reason) {
+        if (options.TelemetryOnly) {
+            reason = TelemetryOnlyReason;
+            return false;
+        }
+
+        return base.AcceptTask(task, out reason);
+    }
 
     protected override async Task RunTaskAsync(TaskHandle handle) {
         var task = handle.Task;
@@ -242,6 +289,10 @@ public class ObservatoryAgent : SiteAgent {
     // ---- commands ---------------------------------------------------------------------------------
 
     protected override async Task<string?> OnCommandAsync(Command command, CancellationToken cancellationToken) {
+        if (options.TelemetryOnly) {
+            throw new InvalidOperationException($"{command.Kind} refused: {TelemetryOnlyReason}");
+        }
+
         var mount = devices.Mount;
         var roof = devices.Roof;
 

@@ -19,6 +19,9 @@ public sealed class SiteBinding {
 
     public bool IsAltAz { get; init; }
 
+    /// <summary>The mount declares <c>pier_side</c>: its joints are axis angles that flip through the pole.</summary>
+    public bool IsGermanEquatorial { get; init; }
+
     public string? CameraEntity { get; init; }
 
     public string? FilterWheelEntity { get; init; }
@@ -55,6 +58,7 @@ public sealed class SiteBinding {
             InstrumentId = instrument.Id,
             MountEntity = instrument.Mount,
             IsAltAz = altAz,
+            IsGermanEquatorial = !altAz && mount?.Property(Channels.MountPierSide) != null,
             HaJoint = altAz ? az! : ha ?? "ra",
             DecJoint = altAz ? alt! : joints.FirstOrDefault(j => j == "dec") ?? "dec",
             CameraEntity = instrument.Camera,

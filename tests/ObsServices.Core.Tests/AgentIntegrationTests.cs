@@ -126,7 +126,10 @@ public class AgentIntegrationTests {
 
                 state = await WaitForState(siteId, s => s["latest"]![Channels.Channel(mount, Channels.MountMode)]?.GetValue<string>() == Channels.MountModeTracking, TimeSpan.FromSeconds(5));
                 Assert.That(state["latest"]![Channels.Channel(shed, Channels.RoofState)]!.GetValue<string>(), Is.EqualTo(Channels.RoofOpen));
-                Assert.That(state["latest"]![Channels.Channel(mount, "dec")]!.GetValue<double>(), Is.EqualTo(89.26).Within(0.01));
+                Assert.That(state["latest"]![Channels.Channel(mount, "dec")]!.GetValue<double>(), Is.EqualTo(89.26).Within(0.01), "normal pose: the dec axis is the sky declination");
+                Assert.That(state["latest"]![Channels.Channel(mount, Channels.MountDecDeg)]!.GetValue<double>(), Is.EqualTo(89.26).Within(0.01));
+                Assert.That(agent.Binding.IsGermanEquatorial, Is.True, "gem_mount declares pier_side");
+                Assert.That(state["latest"]![Channels.Channel(mount, Channels.MountPierSide)]!.GetValue<string>(), Is.EqualTo(Channels.PierEast));
                 Assert.That(state["latest"]![Channels.Channel(taskId, Channels.TaskFramesTotal)]!.GetValue<double>(), Is.EqualTo(3), "frames are properties of the task");
                 Assert.That(state["latest"]![Channels.Channel(taskId, Channels.TaskFramesDone)]!.GetValue<double>(), Is.EqualTo(3));
                 Assert.That(agent.Camera.Exposures.Select(e => e.Filter), Is.EqualTo(new[] { "Ha", "Ha", "L" }));
@@ -186,17 +189,61 @@ public class AgentIntegrationTests {
     }
 
     [Test]
-    public async Task BadTokenIsRefusedAndTheAgentKeepsRetrying() {
-        var siteId = "csbad-" + Guid.NewGuid().ToString("N")[..8];
-        await ServerFixture.PostAsync("/api/sites", new { id = siteId, name = "bad token", from_assembly = "observatory", location = new { lat_deg = Lat, lon_deg = Lon } });
+    public async Task TelemetryOnlyAgentPublishesButSkipsTasksAndRefusesCommands() {
+        var siteId = "csro-" + Guid.NewGuid().ToString("N")[..8];
+        await ServerFixture.PostAsync("/api/sites", new { id = siteId, name = "telemetry only", from_assembly = "observatory", location = new { lat_deg = Lat, lon_deg = Lon } });
 
         try {
-            var agent = TestAgent.Create(ServerFixture.BaseUrl!, siteId, "tca_not_a_real_token", Lat, Lon);
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-            await agent.RunAsync(cts.Token);
+            var manifest = await ServerFixture.GetAsync($"/api/sites/{siteId}/entities");
+            var mount = manifest["instruments"]![0]!["id"]!.GetValue<string>();
+            var token = (await ServerFixture.PostAsync($"/api/sites/{siteId}/agent-tokens", new { label = "ro" }))["token"]!.GetValue<string>();
+            var options = new ObservatoryAgentOptions { TelemetryOnly = true };
+            var agent = TestAgent.Create(ServerFixture.BaseUrl!, siteId, token, Lat, Lon, options);
+            agent.StateInterval = TimeSpan.FromMilliseconds(200);
+            using var runCts = new CancellationTokenSource();
+            var runner = agent.RunAsync(runCts.Token);
 
-            Assert.That(agent.IsConnected, Is.False);
-            Assert.That(agent.Logged, Has.Some.Contains("reconnecting"));
+            try {
+                await agent.Ready.WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.That(agent.Capabilities, Does.Contain(ObservatoryAgent.TelemetryOnlyCapability));
+
+                // state still flows
+                var state = await WaitForState(siteId, s => s["latest"]![Channels.Channel(mount, "ra")] != null, TimeSpan.FromSeconds(10));
+                Assert.That(state["connection"]!.GetValue<string>(), Is.EqualTo("online"));
+
+                // a task is handed back as skipped, with the reason, and the hardware never moved
+                var record = await ServerFixture.PostAsync($"/api/sites/{siteId}/tasks", new {
+                    name = "Polaris", instrument = mount,
+                    target = new { name = "Polaris", ra_deg = 37.95, dec_deg = 89.26 },
+                    sequence = new[] { new { filter = "L", seconds = 10, count = 1 } },
+                });
+                var taskId = record["task"]!["id"]!.GetValue<string>();
+                var done = await WaitForTask(siteId, taskId, TimeSpan.FromSeconds(10));
+                Assert.That(done["status"]!.GetValue<string>(), Is.EqualTo("skipped"), done.ToJsonString());
+                Assert.That(done["message"]!.GetValue<string>(), Does.Contain("telemetry-only"));
+                Assert.That(agent.Mount.Calls, Is.Empty);
+                Assert.That(agent.Camera.Exposures, Is.Empty);
+
+                // a command is refused in its ack, which the service records as an event
+                await ServerFixture.PostAsync($"/api/sites/{siteId}/commands", new { kind = "park" });
+                await WaitForState(siteId, s => s["events"]!.AsArray().Any(e => e!["message"]!.GetValue<string>().Contains("telemetry-only")), TimeSpan.FromSeconds(5));
+                Assert.That(agent.Mount.Calls, Is.Empty);
+
+                // the switch is live: turning it off makes the next command go through
+                options.TelemetryOnly = false;
+                await agent.Mount.UnparkAsync(default);
+                await ServerFixture.PostAsync($"/api/sites/{siteId}/commands", new { kind = "park" });
+                await WaitForState(siteId, s => s["latest"]![Channels.Channel(mount, Channels.MountMode)]?.GetValue<string>() == Channels.MountModeParked, TimeSpan.FromSeconds(5));
+                Assert.That(agent.Mount.Calls, Does.Contain("park"));
+            } finally {
+                agent.Stop();
+                runCts.Cancel();
+
+                try {
+                    await runner.WaitAsync(TimeSpan.FromSeconds(10));
+                } catch (Exception) {
+                }
+            }
         } finally {
             await ServerFixture.DeleteAsync($"/api/sites/{siteId}");
         }

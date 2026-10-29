@@ -21,6 +21,8 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Service URL" />
@@ -41,7 +43,11 @@
                 <TextBlock Grid.Row="5" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Roof open joint (mm)" />
                 <TextBox Grid.Row="5" Grid.Column="1" Margin="0,4" Width="80" HorizontalAlignment="Left" Text="{Binding RoofOpenJointValue, UpdateSourceTrigger=LostFocus}" ToolTip="Roof travel reported to the twin when the shutter is open" />
 
-                <CheckBox Grid.Row="6" Grid.Column="1" Margin="0,8,0,4" Content="Connect when N.I.N.A. starts" IsChecked="{Binding AutoConnect}" />
+                <TextBlock Grid.Row="6" Grid.Column="0" Margin="0,12,0,4" VerticalAlignment="Center" Text="Mode" />
+                <CheckBox Grid.Row="6" Grid.Column="1" Margin="0,12,0,4" Content="Telemetry only (publish state, accept no tasks or commands)" IsChecked="{Binding TelemetryOnly}" ToolTip="Takes effect immediately. Untick to let the service assign observations and send stop, park, unpark, roof and safe commands." />
+                <TextBlock Grid.Row="7" Grid.Column="1" Margin="0,0,0,4" Opacity="0.8" Text="{Binding ModeDescription}" TextWrapping="Wrap" />
+
+                <CheckBox Grid.Row="8" Grid.Column="1" Margin="0,8,0,4" Content="Connect when N.I.N.A. starts" IsChecked="{Binding AutoConnect}" />
             </Grid>
 
             <StackPanel Margin="0,12,0,0" Orientation="Horizontal">
