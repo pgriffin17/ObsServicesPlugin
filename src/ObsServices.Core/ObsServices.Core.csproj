@@ -2,7 +2,9 @@
   <!-- Platform-neutral half of the plugin: the telescope_control agent protocol and runtime.
        No N.I.N.A. or WPF references, so it builds and its tests run on Linux. -->
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <!-- Directory.Build.props sets a single TargetFramework for the host-facing projects; clear it so the list below wins. -->
+    <TargetFramework></TargetFramework>
+    <TargetFrameworks>$(ObsCoreTargetFrameworks)</TargetFrameworks>
     <UseWPF>false</UseWPF>
     <Nullable>enable</Nullable>
     <RootNamespace>ObsServices.Core</RootNamespace>

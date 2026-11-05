@@ -12,7 +12,10 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-image="${DOTNET_SDK_IMAGE:-mcr.microsoft.com/dotnet/sdk:10.0}"
+# The SDK major comes from global.json; the Ubuntu ("noble") images share the host's glibc so the
+# telescope-server binary built here runs inside them.
+sdk_major="$(sed -nE 's/.*"version": *"([0-9]+)\..*/\1/p' "$here/global.json" | head -1)"
+image="${DOTNET_SDK_IMAGE:-mcr.microsoft.com/dotnet/sdk:${sdk_major:-10}.0-noble}"
 tc="${TELESCOPE_CONTROL:-$(cd "$here/.." && pwd)/telescope_control}"
 nuget="${NUGET_PACKAGES_DIR:-$HOME/.nuget/packages}"
 home="${here}/.dotnet-home"

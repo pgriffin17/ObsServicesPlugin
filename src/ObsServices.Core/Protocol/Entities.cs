@@ -2,25 +2,24 @@ using System.Text.Json.Serialization;
 
 namespace ObsServices.Core.Protocol;
 
-[JsonConverter(typeof(JsonStringEnumConverter<PropertyKind>))]
+// Enums serialize as snake_case strings through the naming policy registered in ProtocolJson.Options.
 public enum PropertyKind {
-    [JsonStringEnumMemberName("number")] Number,
-    [JsonStringEnumMemberName("text")] Text,
-    [JsonStringEnumMemberName("bool")] Bool,
+    Number,
+    Text,
+    Bool,
 }
 
-[JsonConverter(typeof(JsonStringEnumConverter<EntityKind>))]
 public enum EntityKind {
     /// <summary>The site as a whole (sidereal time, site-wide readings).</summary>
-    [JsonStringEnumMemberName("site")] Site,
+    Site,
     /// <summary>The agent process (its clock, time scale).</summary>
-    [JsonStringEnumMemberName("agent")] Agent,
+    Agent,
     /// <summary>An instance of a library component in the site's assembly.</summary>
-    [JsonStringEnumMemberName("component")] Component,
+    Component,
     /// <summary>Something the agent drives that is not modelled in the assembly.</summary>
-    [JsonStringEnumMemberName("device")] Device,
+    Device,
     /// <summary>An observation task.</summary>
-    [JsonStringEnumMemberName("task")] Task,
+    Task,
 }
 
 /// <summary>A property an entity publishes.</summary>

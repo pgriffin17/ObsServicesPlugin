@@ -52,15 +52,14 @@ public sealed class ObservationTask {
     public int TotalFrames => Sequence.Sum(e => e.Count);
 }
 
-[JsonConverter(typeof(JsonStringEnumConverter<ObservationStatus>))]
 public enum ObservationStatus {
-    [JsonStringEnumMemberName("queued")] Queued,
-    [JsonStringEnumMemberName("accepted")] Accepted,
-    [JsonStringEnumMemberName("running")] Running,
-    [JsonStringEnumMemberName("completed")] Completed,
-    [JsonStringEnumMemberName("failed")] Failed,
-    [JsonStringEnumMemberName("cancelled")] Cancelled,
-    [JsonStringEnumMemberName("skipped")] Skipped,
+    Queued,
+    Accepted,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+    Skipped,
 }
 
 public static class ObservationStatusExtensions {

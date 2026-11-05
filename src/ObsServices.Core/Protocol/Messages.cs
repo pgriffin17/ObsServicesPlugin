@@ -11,11 +11,10 @@ public static class Timestamp {
     public static double From(DateTimeOffset t) => t.ToUnixTimeMilliseconds() / 1000.0;
 }
 
-[JsonConverter(typeof(JsonStringEnumConverter<Level>))]
 public enum Level {
-    [JsonStringEnumMemberName("info")] Info,
-    [JsonStringEnumMemberName("warn")] Warn,
-    [JsonStringEnumMemberName("error")] Error,
+    Info,
+    Warn,
+    Error,
 }
 
 // ---- agent → service ("up") -----------------------------------------------------------------
@@ -268,7 +267,7 @@ public static class ProtocolJson {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         NumberHandling = JsonNumberHandling.AllowReadingFromString,
-        Converters = { new UpJsonConverter(), new DownJsonConverter() },
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower), new UpJsonConverter(), new DownJsonConverter() },
     };
 
     public static string Encode(Up message) => JsonSerializer.Serialize<Up>(message, Options);

@@ -126,7 +126,7 @@ public static class Channels {
         digest[..16].CopyTo(b);
         b[6] = (byte)((b[6] & 0x0F) | (version << 4));
         b[8] = (byte)((b[8] & 0x3F) | 0x80);
-        var h = Convert.ToHexStringLower(b);
+        var h = Convert.ToHexString(b).ToLowerInvariant();
         return $"{h[0..8]}-{h[8..12]}-{h[12..16]}-{h[16..20]}-{h[20..32]}";
     }
 }

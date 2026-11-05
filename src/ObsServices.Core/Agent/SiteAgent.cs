@@ -55,7 +55,8 @@ public abstract class SiteAgent {
     /// <summary>
     /// A ping unanswered for this long closes the socket and triggers a reconnect, so a half-open
     /// connection (cable pulled, NAT entry gone) is noticed within about a minute instead of whenever
-    /// TCP gives up.
+    /// TCP gives up. Enforced on .NET 9 and later; on .NET 8 the runtime has no such timeout and a
+    /// half-open socket is only noticed when TCP reports it.
     /// </summary>
     public TimeSpan KeepAliveTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
@@ -181,7 +182,9 @@ public abstract class SiteAgent {
             try {
                 ws.Options.SetRequestHeader("Authorization", $"Bearer {Token}");
                 ws.Options.KeepAliveInterval = KeepAliveInterval;
+#if NET9_0_OR_GREATER
                 ws.Options.KeepAliveTimeout = KeepAliveTimeout;
+#endif
                 ws.Options.CollectHttpResponseDetails = true;
 
                 using (var handshake = CancellationTokenSource.CreateLinkedTokenSource(ct)) {

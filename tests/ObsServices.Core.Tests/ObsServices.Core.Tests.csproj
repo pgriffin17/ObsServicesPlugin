@@ -2,7 +2,7 @@
   <!-- Runs on Linux: no N.I.N.A. or WPF. The integration tests start the telescope_control server
        from a sibling checkout (or TELESCOPE_SERVER_BIN / TELESCOPE_LIBRARY) and skip when it is absent. -->
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>$(ObsTestTargetFramework)</TargetFramework>
     <UseWPF>false</UseWPF>
     <Nullable>enable</Nullable>
     <IsTestProject>true</IsTestProject>
