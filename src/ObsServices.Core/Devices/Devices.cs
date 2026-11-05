@@ -113,6 +113,44 @@ public interface IFocuserDevice {
     bool Connected { get; }
 
     int? Position { get; }
+
+    /// <summary>Move to an absolute position and return once there.</summary>
+    Task MoveAsync(int position, CancellationToken cancellationToken);
+}
+
+/// <summary>What the sequencing software reports about itself.</summary>
+public sealed record SequencerReading(
+    bool Connected,
+    /// <summary><c>N.I.N.A.</c>, <c>Ekos</c>, …</summary>
+    string Software,
+    string Version,
+    string? Profile,
+    bool Running,
+    /// <summary>Name of the loaded program, or the service's program id when it is one of ours.</summary>
+    string? Program,
+    /// <summary>What the sequencer is doing right now.</summary>
+    string? RunningItem,
+    /// <summary>Installed add-ons (plugin assemblies, modules) a program digest's extensions are checked against.</summary>
+    IReadOnlyList<string> Extensions) {
+    public static readonly SequencerReading Disconnected = new(false, string.Empty, string.Empty, null, false, null, null, Array.Empty<string>());
+}
+
+/// <summary>
+/// The sequencing software on site (N.I.N.A.'s advanced sequencer, a script runner): the thing that
+/// runs programs. Binds to the site's <c>sequencer</c> component when there is one.
+/// </summary>
+public interface ISequencerHost {
+    SequencerReading Read();
+
+    /// <summary>Program formats this host runs; each becomes a <c>program:&lt;format&gt;</c> capability.</summary>
+    IReadOnlyList<string> Formats { get; }
+
+    /// <summary>
+    /// Run one program to completion. The body is in <c>program.Body</c>. Return normally for
+    /// completed, throw for failed; honour <paramref name="cancellationToken"/>, which fires on cancel.
+    /// <paramref name="progress"/> takes frames done so far.
+    /// </summary>
+    Task RunProgramAsync(Protocol.ProgramRef program, Protocol.ObservationTask task, IProgress<int> progress, CancellationToken cancellationToken);
 }
 
 /// <summary>What a host has plugged in. Any member may be null (not present) or report disconnected.</summary>
@@ -126,6 +164,8 @@ public interface IDeviceSet {
     IRoofDevice? Roof { get; }
 
     IFocuserDevice? Focuser { get; }
+
+    ISequencerHost? Sequencer { get; }
 }
 
 /// <summary>A plain bag of devices for hosts that compose them by hand.</summary>
@@ -139,4 +179,6 @@ public sealed class DeviceSet : IDeviceSet {
     public IRoofDevice? Roof { get; init; }
 
     public IFocuserDevice? Focuser { get; init; }
+
+    public ISequencerHost? Sequencer { get; init; }
 }

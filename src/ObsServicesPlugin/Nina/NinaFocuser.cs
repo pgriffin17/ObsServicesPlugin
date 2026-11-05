@@ -13,4 +13,8 @@ public sealed class NinaFocuser : IFocuserDevice {
     public bool Connected => focuser.GetInfo()?.Connected == true;
 
     public int? Position => focuser.GetInfo() is { Connected: true } info ? info.Position : null;
+
+    public async Task MoveAsync(int position, CancellationToken cancellationToken) {
+        await focuser.MoveFocuser(position, cancellationToken);
+    }
 }
