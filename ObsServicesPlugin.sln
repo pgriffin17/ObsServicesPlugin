@@ -1,0 +1,50 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{DB483B88-F36F-431B-8F66-97E35D71E99F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ObsServices.Core", "src\ObsServices.Core\ObsServices.Core.csproj", "{782D1559-0B20-4FC4-996A-68B7DBFD727A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ObsServicesPlugin", "src\ObsServicesPlugin\ObsServicesPlugin.csproj", "{21001A89-D658-483E-8954-120C18F69BAB}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{7714C626-0C50-47BE-A0EB-9F2085D29D89}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ObsServices.Core.Tests", "tests\ObsServices.Core.Tests\ObsServices.Core.Tests.csproj", "{3DCF640B-0C75-44A3-9B9C-89E320B8EA4E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ObsServicesPlugin.Tests", "tests\ObsServicesPlugin.Tests\ObsServicesPlugin.Tests.csproj", "{11CD4169-6582-4413-B6AA-BE3104F536D6}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{782D1559-0B20-4FC4-996A-68B7DBFD727A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{782D1559-0B20-4FC4-996A-68B7DBFD727A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{782D1559-0B20-4FC4-996A-68B7DBFD727A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{782D1559-0B20-4FC4-996A-68B7DBFD727A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{21001A89-D658-483E-8954-120C18F69BAB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{21001A89-D658-483E-8954-120C18F69BAB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{21001A89-D658-483E-8954-120C18F69BAB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{21001A89-D658-483E-8954-120C18F69BAB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3DCF640B-0C75-44A3-9B9C-89E320B8EA4E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3DCF640B-0C75-44A3-9B9C-89E320B8EA4E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3DCF640B-0C75-44A3-9B9C-89E320B8EA4E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3DCF640B-0C75-44A3-9B9C-89E320B8EA4E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{11CD4169-6582-4413-B6AA-BE3104F536D6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{11CD4169-6582-4413-B6AA-BE3104F536D6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{11CD4169-6582-4413-B6AA-BE3104F536D6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{11CD4169-6582-4413-B6AA-BE3104F536D6}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{782D1559-0B20-4FC4-996A-68B7DBFD727A} = {DB483B88-F36F-431B-8F66-97E35D71E99F}
+		{21001A89-D658-483E-8954-120C18F69BAB} = {DB483B88-F36F-431B-8F66-97E35D71E99F}
+		{3DCF640B-0C75-44A3-9B9C-89E320B8EA4E} = {7714C626-0C50-47BE-A0EB-9F2085D29D89}
+		{11CD4169-6582-4413-B6AA-BE3104F536D6} = {7714C626-0C50-47BE-A0EB-9F2085D29D89}
+	EndGlobalSection
+EndGlobal

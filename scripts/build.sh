@@ -36,10 +36,14 @@ run() {
   docker run --rm "${tty[@]}" --user "$(id -u):$(id -g)" "${env[@]}" "${mounts[@]}" -w /src "$image" "$@"
 }
 
+# .slnx needs SDK 9.0.200+; the N.I.N.A. 3.2 branch carries a classic .sln for the .NET 8 SDK.
+solution="ObsServicesPlugin.slnx"
+[ -f "$here/ObsServicesPlugin.sln" ] && solution="ObsServicesPlugin.sln"
+
 cmd="${1:-build}"; shift || true
 case "$cmd" in
   build)
-    run dotnet build ObsServicesPlugin.slnx -c "${CONFIGURATION:-Debug}" "$@" ;;
+    run dotnet build "$solution" -c "${CONFIGURATION:-Debug}" "$@" ;;
   test)
     run dotnet test tests/ObsServices.Core.Tests/ObsServices.Core.Tests.csproj -c "${CONFIGURATION:-Debug}" "$@" ;;
   shell)

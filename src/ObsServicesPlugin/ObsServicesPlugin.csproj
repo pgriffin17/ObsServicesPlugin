@@ -9,7 +9,7 @@
   <ItemGroup>
     <PackageReference Include="NINA.Plugin" Version="$(NinaPackageVersion)" />
     <!-- Same version N.I.N.A. ships; used for RelayCommand only and not packaged with the plugin. -->
-    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
     <!-- The platform-neutral agent/protocol half; ships inside the plugin package. -->
     <ProjectReference Include="../ObsServices.Core/ObsServices.Core.csproj" />
   </ItemGroup>

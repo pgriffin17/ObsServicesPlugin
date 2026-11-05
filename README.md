@@ -1,6 +1,14 @@
 # ObsServicesPlugin
 
-A plugin for NINA 3.3.0.1060 or later, targeting .NET 10. Metadata lives in Plugin.props. The plugin GUID is permanent.
+**Branch `nina-3.2`: the build for N.I.N.A. 3.2.0.9001 (stable), on .NET 8.** Feature work happens on `dev`
+(N.I.N.A. 3.3 nightlies, .NET 10); this branch carries the same code with only configuration differences:
+`Directory.Build.props` (frameworks and the NINA package version), `global.json`, the solution file (.sln here,
+.slnx on dev), `Plugin.props`
+(`MinimumNinaVersion`), the MVVM toolkit version N.I.N.A. 3.2 ships, and the composition test, which does not
+export the symbol broker that only exists in 3.3. Merge `dev` into this branch to bring changes across; conflicts
+should only ever be in those files.
+
+A plugin for NINA 3.2.0.9001 or later, targeting .NET 8. Metadata lives in Plugin.props. The plugin GUID is permanent.
 
 It makes a N.I.N.A. installation a **site agent** of the telescope_control service (observatory.services): the
 plugin connects outbound to `/ws/agent/{site}`, publishes mount, camera and roof state to the site's entities,
@@ -68,7 +76,8 @@ The N.I.N.A.-hosted tests under `tests/ObsServicesPlugin.Tests` compile here but
 
 ## Develop on Windows
 
-Install the .NET 10.0.4xx SDK and PowerShell 7 on Windows. Open ObsServicesPlugin.slnx in a compatible Visual Studio 2026 installation or use the CLI.
+Install the .NET 8.0.4xx SDK and PowerShell 7 on Windows. Open ObsServicesPlugin.sln in Visual Studio 2022 or use the CLI (this branch uses the classic .sln because the
+.NET 8 SDK does not read .slnx).
 
 ```powershell
 dotnet build

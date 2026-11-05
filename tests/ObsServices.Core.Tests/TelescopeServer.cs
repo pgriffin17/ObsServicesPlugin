@@ -146,7 +146,7 @@ public sealed class TelescopeServer : IDisposable {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
 
         while (dir != null) {
-            if (File.Exists(Path.Combine(dir.FullName, "ObsServicesPlugin.slnx"))) {
+            if ((File.Exists(Path.Combine(dir.FullName, "ObsServicesPlugin.slnx")) || File.Exists(Path.Combine(dir.FullName, "ObsServicesPlugin.sln")))) {
                 return dir.FullName;
             }
 

@@ -1,13 +1,13 @@
 <Project>
   <PropertyGroup>
     <!-- The N.I.N.A.-facing projects follow the host; the core builds for every runtime a supported N.I.N.A. uses. -->
-    <TargetFramework>net10.0-windows</TargetFramework>
-    <ObsCoreTargetFrameworks>net8.0;net10.0</ObsCoreTargetFrameworks>
-    <ObsTestTargetFramework>net10.0</ObsTestTargetFramework>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ObsCoreTargetFrameworks>net8.0</ObsCoreTargetFrameworks>
+    <ObsTestTargetFramework>net8.0</ObsTestTargetFramework>
     <UseWPF>true</UseWPF>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>disable</Nullable>
-    <NinaPackageVersion>3.3.0.1060-nightly</NinaPackageVersion>
+    <NinaPackageVersion>3.2.0.9001</NinaPackageVersion>
     <Deterministic>true</Deterministic>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>

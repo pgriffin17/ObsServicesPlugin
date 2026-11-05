@@ -6,7 +6,6 @@ using NINA.Equipment.Interfaces.ViewModel;
 using NINA.WPF.Base.Interfaces.Mediator;
 using NINA.WPF.Base.Interfaces.ViewModel;
 using NINA.Plugin.Interfaces;
-using NINA.Sequencer.Logic;
 using System.ComponentModel.Composition;
 using System.ComponentModel.Composition.Hosting;
 using System.Reflection;
@@ -32,9 +31,6 @@ namespace ObsServicesPlugin.Tests {
             container.ComposeExportedValue(Mock.Of<IImageSaveMediator>());
             container.ComposeExportedValue(Mock.Of<IOptionsVM>());
             container.ComposeExportedValue(Mock.Of<IMessageBroker>());
-            var broker = new Mock<ISymbolBroker>();
-            broker.Setup(b => b.RegisterSymbolProvider(It.IsAny<string>())).Returns(Mock.Of<ISymbolProvider>());
-            container.ComposeExportedValue(broker.Object);
             return container;
         }
 
