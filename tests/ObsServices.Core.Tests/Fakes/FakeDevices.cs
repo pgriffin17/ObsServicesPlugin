@@ -255,4 +255,58 @@ public sealed class FakeFocuser : IFocuserDevice {
     public bool Connected { get; set; } = true;
 
     public int? Position { get; set; } = 15000;
+
+    public Task MoveAsync(int position, CancellationToken cancellationToken) {
+        Position = position;
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// A sequencer in software: "runs" a program by sleeping through the digest's exposures in scaled
+/// time, one frame at a time, and remembers the bodies it was handed.
+/// </summary>
+public sealed class FakeSequencerHost : ISequencerHost {
+    private readonly FakeClock clock;
+    private bool running;
+    private string? program;
+    private string? runningItem;
+
+    public FakeSequencerHost(FakeClock clock, params string[] formats) {
+        this.clock = clock;
+        Formats = formats.Length == 0 ? new[] { "nina.sequence", "nina.target", "nina.template" } : formats;
+    }
+
+    public bool Connected { get; set; } = true;
+
+    public IReadOnlyList<string> Formats { get; }
+
+    public List<string> Extensions { get; } = new() { "DaleGhent.NINA.AstroPhysicsTools" };
+
+    public List<(string Id, long Revision, string Sha256, int BodyLength)> Runs { get; } = new();
+
+    public SequencerReading Read() => Connected
+        ? new SequencerReading(true, "N.I.N.A.", "3.3.0.1060", "Test profile", running, program, runningItem, Extensions)
+        : SequencerReading.Disconnected;
+
+    public async Task RunProgramAsync(ObsServices.Core.Protocol.ProgramRef p, ObsServices.Core.Protocol.ObservationTask task, IProgress<int> progress, CancellationToken cancellationToken) {
+        Runs.Add((p.Id, p.Revision, p.Sha256, p.Body?.Length ?? 0));
+        running = true;
+        program = p.Id;
+
+        try {
+            var frames = task.Sequence.SelectMany(e => Enumerable.Repeat(e, e.Count)).ToList();
+            var done = 0;
+
+            foreach (var frame in frames) {
+                cancellationToken.ThrowIfCancellationRequested();
+                runningItem = $"Take Exposure {frame.Filter} {frame.Seconds:0}s";
+                await clock.SleepAsync(frame.Seconds, cancellationToken);
+                progress.Report(++done);
+            }
+        } finally {
+            running = false;
+            runningItem = null;
+        }
+    }
 }

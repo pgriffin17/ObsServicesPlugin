@@ -16,6 +16,20 @@ public sealed class NinaSiteAgent : ObservatoryAgent {
     /// <summary>Raised on every log line so the options page can show the latest.</summary>
     public event Action<Level, string>? Logged;
 
+    /// <summary>Raised when the service flips telemetry-only through the sequencer entity, so the setting can follow.</summary>
+    public event Action<bool>? TelemetryOnlyChanged;
+
+    protected override async Task<SetReply> OnSetAsync(string requestId, string entity, IReadOnlyDictionary<string, Value> values, CancellationToken cancellationToken) {
+        var before = TelemetryOnly;
+        var reply = await base.OnSetAsync(requestId, entity, values, cancellationToken);
+
+        if (TelemetryOnly != before) {
+            TelemetryOnlyChanged?.Invoke(TelemetryOnly);
+        }
+
+        return reply;
+    }
+
     protected override void Log(Level level, string message, Exception? exception = null) {
         switch (level) {
             case Level.Error:

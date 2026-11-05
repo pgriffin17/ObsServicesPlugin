@@ -50,6 +50,18 @@ public sealed class Settings {
         set => options.SetValueBoolean(nameof(TelemetryOnly), value);
     }
 
+    /// <summary>The site's <c>sequencer</c> instance this N.I.N.A. publishes itself to, when the site has several. Empty = the first.</summary>
+    public string Sequencer {
+        get => options.GetValueString(nameof(Sequencer), string.Empty);
+        set => options.SetValueString(nameof(Sequencer), (value ?? string.Empty).Trim());
+    }
+
+    /// <summary>Let a <c>nina.sequence</c> program replace the loaded sequence and run it. Off by default; target and template programs are always allowed.</summary>
+    public bool AllowWholeSequences {
+        get => options.GetValueBoolean(nameof(AllowWholeSequences), false);
+        set => options.SetValueBoolean(nameof(AllowWholeSequences), value);
+    }
+
     /// <summary>Connect to the service as soon as N.I.N.A. has loaded the plugin.</summary>
     public bool AutoConnect {
         get => options.GetValueBoolean(nameof(AutoConnect), false);

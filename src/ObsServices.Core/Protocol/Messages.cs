@@ -107,7 +107,64 @@ public sealed class Ack : Up {
 
     public string? Message { get; set; }
 
+    /// <summary>For <c>set</c> commands: how far it got.</summary>
+    public SetStatus? Status { get; set; }
+
+    /// <summary>For <c>set</c> commands: what the hardware actually settled on.</summary>
+    public Dictionary<string, Value>? Observed { get; set; }
+
     public double T { get; set; }
+
+    /// <summary>A reply to a <c>set</c>; <c>ok</c> follows from the status.</summary>
+    public static Ack ForSet(string commandId, SetStatus status, string? message, Dictionary<string, Value>? observed, double t) =>
+        new() { CommandId = commandId, Ok = status is SetStatus.Accepted or SetStatus.Done, Message = message, Status = status, Observed = observed, T = t };
+}
+
+/// <summary>
+/// How an agent answered a <c>set</c>. <c>accepted</c> is followed by a second ack for the same
+/// command once the value is reached; every other status is final.
+/// </summary>
+public enum SetStatus {
+    /// <summary>Taken; a <c>done</c> (or <c>rejected</c>) ack follows.</summary>
+    Accepted,
+    /// <summary>Reached; <c>observed</c> says what the hardware settled on.</summary>
+    Done,
+    /// <summary>Would not or could not: the message says why.</summary>
+    Rejected,
+    /// <summary>The agent has no device behind that entity or property.</summary>
+    Unbound,
+    /// <summary>The agent knows the property but cannot write it.</summary>
+    Unsupported,
+    /// <summary>A task is running on that instrument and the agent will not interleave.</summary>
+    Busy,
+    /// <summary>A newer set for the same property replaced it (issued by the service).</summary>
+    Superseded,
+    /// <summary>No answer in time (issued by the service).</summary>
+    Timeout,
+}
+
+/// <summary>What an agent answers a <c>set</c> with. See <see cref="SetStatus"/>.</summary>
+public sealed record SetReply(SetStatus Status, string? Message = null, Dictionary<string, Value>? Observed = null) {
+    public static SetReply Done(string? message = null, Dictionary<string, Value>? observed = null) => new(SetStatus.Done, message, observed);
+
+    public static SetReply Done(string? message, string property, Value value) => new(SetStatus.Done, message, new Dictionary<string, Value> { [property] = value });
+
+    public static SetReply Accepted(string? message = null) => new(SetStatus.Accepted, message);
+
+    public static SetReply Rejected(string message) => new(SetStatus.Rejected, message);
+
+    public static SetReply Unbound(string message = "no device behind that entity") => new(SetStatus.Unbound, message);
+
+    public static SetReply Unsupported(string message = "cannot be set") => new(SetStatus.Unsupported, message);
+
+    public static SetReply Busy(string message = "a task is running") => new(SetStatus.Busy, message);
+}
+
+/// <summary>Entities the agent adds or annotates after <c>hello</c>: the same list as <c>hello.entities</c>.</summary>
+public sealed class EntitiesMsg : Up {
+    internal override string Type => "entities";
+
+    public List<Entity> Entities { get; set; } = new();
 }
 
 // ---- service → agent ("down") ---------------------------------------------------------------
@@ -167,6 +224,31 @@ public sealed class Command : Down {
     /// </summary>
     [JsonIgnore]
     public double? TimeScaleFactor => Number("factor");
+
+    /// <summary>A <c>set</c> command's target entity, or null for other kinds.</summary>
+    [JsonIgnore]
+    public string? SetEntity => Kind == CommandKinds.Set && Args.TryGetValue("entity", out var e) && e.ValueKind == JsonValueKind.String ? e.GetString() : null;
+
+    /// <summary>A <c>set</c> command's requested values, empty for other kinds.</summary>
+    public Dictionary<string, Value> SetValues() {
+        var result = new Dictionary<string, Value>();
+
+        if (Kind != CommandKinds.Set || !Args.TryGetValue("values", out var values) || values.ValueKind != JsonValueKind.Object) {
+            return result;
+        }
+
+        foreach (var p in values.EnumerateObject()) {
+            result[p.Name] = p.Value.ValueKind switch {
+                JsonValueKind.Number => Value.Number(p.Value.GetDouble()),
+                JsonValueKind.True => Value.Bool(true),
+                JsonValueKind.False => Value.Bool(false),
+                JsonValueKind.String => Value.Text(p.Value.GetString() ?? string.Empty),
+                _ => Value.Text(p.Value.GetRawText()),
+            };
+        }
+
+        return result;
+    }
 }
 
 public static class CommandKinds {
@@ -177,6 +259,9 @@ public static class CommandKinds {
     public const string CloseRoof = "close_roof";
     public const string Safe = "safe";
     public const string SetTimeScale = "set_time_scale";
+
+    /// <summary>Set one or more properties of one entity; answered with a <see cref="SetStatus"/>.</summary>
+    public const string Set = "set";
 }
 
 // ---- converters -----------------------------------------------------------------------------
@@ -199,6 +284,7 @@ public sealed class UpJsonConverter : JsonConverter<Up> {
             "state" => node.Deserialize<StateMsg>(inner),
             "event" => node.Deserialize<Event>(inner),
             "ack" => node.Deserialize<Ack>(inner),
+            "entities" => node.Deserialize<EntitiesMsg>(inner),
             _ => throw new JsonException($"unknown up message type `{type}`"),
         };
     }
@@ -261,7 +347,7 @@ public sealed class DownJsonConverter : JsonConverter<Down> {
 /// <summary>Serializer settings shared by every protocol type.</summary>
 public static class ProtocolJson {
     /// <summary>Wire protocol version this library speaks.</summary>
-    public const int Version = 2;
+    public const int Version = 4;
 
     public static readonly JsonSerializerOptions Options = new() {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,

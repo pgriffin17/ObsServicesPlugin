@@ -39,6 +39,20 @@ public sealed class PropertyInfo {
     /// <summary>The assembly joint this property drives (component entities).</summary>
     public string? Joint { get; set; }
 
+    /// <summary>
+    /// The service may ask the agent to set it (<c>set</c> command). The library decides; an agent's
+    /// annotation (hello or an <c>entities</c> message) overrides it when stated. Null = not stated.
+    /// </summary>
+    public bool? Writable { get; set; }
+
+    [JsonIgnore]
+    public bool IsWritable => Writable == true;
+
+    public PropertyInfo AsWritable() {
+        Writable = true;
+        return this;
+    }
+
     public static PropertyInfo Number(string name, string? unit = null, string? description = null) =>
         new() { Name = name, Kind = PropertyKind.Number, Unit = string.IsNullOrEmpty(unit) ? null : unit, Description = description };
 

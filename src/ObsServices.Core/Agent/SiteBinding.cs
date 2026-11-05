@@ -32,18 +32,23 @@ public sealed class SiteBinding {
 
     public IReadOnlyList<string> RoofJoints { get; init; } = Array.Empty<string>();
 
+    /// <summary>The site's <c>sequencer</c> component instance this agent publishes itself to, when the assembly has one.</summary>
+    public string? SequencerEntity { get; init; }
+
     public static readonly SiteBinding Empty = new();
 
     /// <summary>
     /// Bind to the instrument named by <paramref name="instrumentKey"/> (id, name or mount instance
     /// name), or the site's first instrument when null.
     /// </summary>
-    public static SiteBinding FromManifest(Manifest manifest, string? instrumentKey = null) {
+    public static SiteBinding FromManifest(Manifest manifest, string? instrumentKey = null, string? sequencerKey = null) {
         var instrument = instrumentKey == null ? manifest.Instruments.FirstOrDefault() : manifest.Instrument(instrumentKey);
+        var sequencers = manifest.OfKind(EntityKind.Component).Where(e => e.Component == Channels.SequencerComponent).ToList();
+        var sequencer = sequencerKey == null ? sequencers.FirstOrDefault() : sequencers.FirstOrDefault(e => e.Id == sequencerKey || e.Instance == sequencerKey || e.Name == sequencerKey);
         var roof = manifest.OfKind(EntityKind.Component).Select(e => (Entity: e, Joints: e.Joints().Where(j => j.StartsWith("roof", StringComparison.Ordinal)).ToList())).FirstOrDefault(r => r.Joints.Count > 0);
 
         if (instrument == null) {
-            return new SiteBinding { RoofEntity = roof.Entity?.Id, RoofJoints = roof.Joints ?? new List<string>() };
+            return new SiteBinding { RoofEntity = roof.Entity?.Id, RoofJoints = roof.Joints ?? new List<string>(), SequencerEntity = sequencer?.Id };
         }
 
         var mount = manifest.Entity(instrument.Mount);
@@ -66,6 +71,7 @@ public sealed class SiteBinding {
             FocuserEntity = below.FirstOrDefault(e => e.Joints().Contains(Channels.Focus))?.Id,
             RoofEntity = roof.Entity?.Id,
             RoofJoints = roof.Joints ?? new List<string>(),
+            SequencerEntity = sequencer?.Id,
         };
     }
 }

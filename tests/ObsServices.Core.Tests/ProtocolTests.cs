@@ -39,7 +39,7 @@ public class ProtocolTests {
         var root = doc.RootElement;
 
         Assert.That(root.GetProperty("type").GetString(), Is.EqualTo("hello"));
-        Assert.That(root.GetProperty("protocol").GetInt32(), Is.EqualTo(2));
+        Assert.That(root.GetProperty("protocol").GetInt32(), Is.EqualTo(4));
         Assert.That(root.GetProperty("entities")[0].GetProperty("kind").GetString(), Is.EqualTo("device"));
         Assert.That(root.GetProperty("entities")[0].GetProperty("properties")[0].GetProperty("type").GetString(), Is.EqualTo("number"));
         Assert.That(root.GetProperty("entities")[0].GetProperty("properties")[0].GetProperty("unit").GetString(), Is.EqualTo("C"));
@@ -130,6 +130,53 @@ public class ProtocolTests {
         // what the service's serde emits, reproduced for the round trip
         var json = ProtocolJson.Encode(new Command { Id = "c2", Kind = "set_time_scale", Args = { ["factor"] = JsonSerializer.SerializeToElement(30.0) } });
         Assert.That(json, Is.EqualTo("{\"type\":\"command\",\"id\":\"c2\",\"kind\":\"set_time_scale\",\"factor\":30}"));
+    }
+
+    [Test]
+    public void SetCommandsAndTheirAcksMatchTheServiceWire() {
+        // what the service sends: `{"type":"command","id":"c2","kind":"set","entity":"m1","values":{"ra":12.5,"dec":-5.4}}`
+        var set = (Command)ProtocolJson.DecodeDown("""{"type":"command","id":"c2","kind":"set","entity":"m1","values":{"ra":12.5,"dec":-5.4,"mode":"tracking","on":true}}""");
+        Assert.That(set.Kind, Is.EqualTo(CommandKinds.Set));
+        Assert.That(set.SetEntity, Is.EqualTo("m1"));
+        var values = set.SetValues();
+        Assert.That(values["ra"].AsDouble(), Is.EqualTo(12.5));
+        Assert.That(values["mode"].AsText(), Is.EqualTo("tracking"));
+        Assert.That(values["on"].AsBool(), Is.True);
+        Assert.That(((Command)ProtocolJson.DecodeDown("""{"type":"command","id":"c","kind":"park"}""")).SetValues(), Is.Empty);
+
+        var done = ProtocolJson.Encode(Ack.ForSet("c2", SetStatus.Done, "reached", new Dictionary<string, Value> { ["ra"] = 12.49 }, 3.0));
+        Assert.That(done, Is.EqualTo("{\"type\":\"ack\",\"command_id\":\"c2\",\"ok\":true,\"message\":\"reached\",\"status\":\"done\",\"observed\":{\"ra\":12.49},\"t\":3}"));
+        var busy = ProtocolJson.Encode(Ack.ForSet("c3", SetStatus.Busy, "a task is running", null, 4.0));
+        Assert.That(busy, Does.Contain("\"ok\":false").And.Contain("\"status\":\"busy\"").And.Not.Contain("observed"));
+        Assert.That(SetReply.Unsupported().Status, Is.EqualTo(SetStatus.Unsupported));
+    }
+
+    [Test]
+    public void EntitiesAnnotationsAndProgramsAreV4() {
+        var entities = ProtocolJson.Encode(new EntitiesMsg { Entities = { new Entity { Id = "w1", Kind = EntityKind.Component, Name = "wheel", Properties = { PropertyInfo.Text("filter", new[] { "L", "Ha" }, "Filter in the light path").AsWritable() } } } });
+        Assert.That(entities, Does.StartWith("{\"type\":\"entities\",\"entities\":[{\"id\":\"w1\""));
+        Assert.That(entities, Does.Contain("\"writable\":true"));
+        var back = (EntitiesMsg)ProtocolJson.DecodeUp(entities);
+        Assert.That(back.Entities[0].Properties[0].IsWritable, Is.True);
+
+        var plain = new PropertyInfo { Name = "ra" };
+        Assert.That(ProtocolJson.Encode(new EntitiesMsg { Entities = { new Entity { Id = "x", Properties = { plain } } } }), Does.Not.Contain("writable"), "unstated stays absent");
+
+        var assign = (TaskAssign)ProtocolJson.DecodeDown("""{"type":"task_assign","id":"t","name":"M57","target":{"name":"M 57","ra_deg":283.4,"dec_deg":33.03},"sequence":[{"filter":"Ha","seconds":30,"count":3,"filters":{"w1":"Ha","w2":"ND3"}}],"program":{"id":"prg_1","format":"nina.sequence","revision":2,"sha256":"ab","body":"{}"}}""");
+        var p = assign.Task.Program!;
+        Assert.That((p.Id, p.Format, p.Revision, p.Sha256, p.Body), Is.EqualTo(("prg_1", "nina.sequence", 2L, "ab", "{}")));
+        Assert.That(assign.Task.NeedsCapability, Is.EqualTo("program:nina.sequence"));
+        Assert.That(ProgramRef.CapabilityFormat("program:ekos.esq"), Is.EqualTo("ekos.esq"));
+        Assert.That(ProgramRef.CapabilityFormat("slew"), Is.Null);
+        Assert.That(ProgramRef.CapabilityFormat("program:"), Is.Null);
+        var e = assign.Task.Sequence[0];
+        Assert.That(e.FilterFor("w1"), Is.EqualTo("Ha"));
+        Assert.That(e.FilterFor("w9"), Is.Null, "a wheel the exposure does not name stays put");
+        Assert.That(new Exposure { Filter = "L" }.FilterFor("w9"), Is.EqualTo("L"), "no per-wheel map: the label is the choice");
+
+        var minimal = (TaskAssign)ProtocolJson.DecodeDown("""{"type":"task_assign","id":"t","name":"n","target":{"name":"x","ra_deg":0,"dec_deg":0},"program":{"id":"p","format":"python.script"}}""");
+        Assert.That((minimal.Task.Program!.Revision, minimal.Task.Program.Sha256, minimal.Task.Program.Body), Is.EqualTo((0L, "", (string?)null)));
+        Assert.That(ProtocolJson.Version, Is.EqualTo(4));
     }
 
     [Test]

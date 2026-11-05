@@ -134,11 +134,34 @@ public abstract class SiteAgent {
     protected virtual Task OnManifestAsync(Manifest manifest, CancellationToken cancellationToken) => Task.CompletedTask;
 
     /// <summary>
+    /// Run a task that carries a program (<c>handle.Task.Program</c>, body included). Called instead
+    /// of <see cref="RunTaskAsync"/> for those. The default declines, which reports <c>skipped</c>;
+    /// the service only sends program tasks to agents whose <see cref="Capabilities"/> list
+    /// <c>program:&lt;format&gt;</c>.
+    /// </summary>
+    protected virtual Task RunProgramAsync(TaskHandle handle) =>
+        throw new NotSupportedException($"this agent does not run {handle.Task.Program?.Format} programs");
+
+    /// <summary>
+    /// The service wants properties of an entity set (several at once when they belong together,
+    /// like <c>ra_deg</c> and <c>dec_deg</c>). For a move that takes time return
+    /// <see cref="SetReply.Accepted"/> and call <see cref="SetDoneAsync"/> or <see cref="SetFailedAsync"/>
+    /// with the request id afterwards. Throw to report <c>rejected</c> with the exception's text.
+    /// </summary>
+    protected virtual Task<SetReply> OnSetAsync(string requestId, string entity, IReadOnlyDictionary<string, Value> values, CancellationToken cancellationToken) =>
+        Task.FromResult(SetReply.Unsupported("this agent does not set properties"));
+
+    /// <summary>
     /// Decide whether to take a task at all, before it is reported running. Return false with a
     /// reason to have it reported as <c>skipped</c> (the service hands it to another agent or leaves
     /// it to the operator). Default: accept everything.
     /// </summary>
     protected virtual bool AcceptTask(ObservationTask task, out string? reason) {
+        if (task.Program is { } program && !Capabilities.Contains(ProgramRef.Capability(program.Format))) {
+            reason = $"this agent does not run {program.Format} programs";
+            return false;
+        }
+
         reason = null;
         return true;
     }
@@ -245,7 +268,7 @@ public abstract class SiteAgent {
     private static string DescribeFailure(ClientWebSocket ws, Exception e) {
         var status = ws.HttpStatusCode;
 
-        if (status != 0) {
+        if (status != 0 && (int)status != 101) {
             var hint = (int)status switch {
                 401 => " (the agent token was refused: mint a new one for this site)",
                 403 => " (forbidden)",
@@ -361,6 +384,20 @@ public abstract class SiteAgent {
         return SendAsync(state);
     }
 
+    /// <summary>
+    /// Add or annotate entities after <c>hello</c>: for a known entity id the properties are merged
+    /// (a wheel's real filter list as <c>values</c>, what the agent can set as <c>writable</c>); a new
+    /// id adds a device. The service keeps the declaration with the site.
+    /// </summary>
+    public Task DeclareEntitiesAsync(IEnumerable<Entity> entities) => SendAsync(new EntitiesMsg { Entities = entities.ToList() });
+
+    /// <summary>Second answer to a set that was accepted: it got there.</summary>
+    public Task SetDoneAsync(string requestId, string? message = null, Dictionary<string, Value>? observed = null) =>
+        SendAsync(Ack.ForSet(requestId, SetStatus.Done, message, observed, Now()));
+
+    /// <summary>Second answer to a set that was accepted: it did not get there.</summary>
+    public Task SetFailedAsync(string requestId, string message) => SendAsync(Ack.ForSet(requestId, SetStatus.Rejected, message, null, Now()));
+
     /// <summary>Convenience: one entity's properties.</summary>
     public Task PublishAsync(string entityId, IEnumerable<KeyValuePair<string, Value>> properties) {
         var m = new StateMsg(Now());
@@ -457,10 +494,28 @@ public abstract class SiteAgent {
                 await OnPlanAsync(plan.Instrument, plan.Order, ct).ConfigureAwait(false);
                 break;
 
+            case Command command when command.Kind == CommandKinds.Set:
+                _ = Task.Run(() => HandleSetAsync(command, ct), CancellationToken.None);
+                break;
+
             case Command command:
                 _ = Task.Run(() => HandleCommandAsync(command, ct), CancellationToken.None);
                 break;
         }
+    }
+
+    private async Task HandleSetAsync(Command command, CancellationToken ct) {
+        SetReply reply;
+
+        try {
+            reply = await OnSetAsync(command.Id, command.SetEntity ?? string.Empty, command.SetValues(), ct).ConfigureAwait(false);
+        } catch (NotSupportedException e) {
+            reply = SetReply.Unsupported(e.Message);
+        } catch (Exception e) {
+            reply = SetReply.Rejected(e.Message);
+        }
+
+        await SendAsync(Ack.ForSet(command.Id, reply.Status, reply.Message, reply.Observed, Now())).ConfigureAwait(false);
     }
 
     private async Task HandleCommandAsync(Command command, CancellationToken ct) {
@@ -510,15 +565,24 @@ public abstract class SiteAgent {
             }
 
             await PublishAsync(StateMsg.TaskUpdate(id, ObservationStatus.Running, 0.0, "starting", Now())).ConfigureAwait(false);
-            await RunTaskAsync(handle).ConfigureAwait(false);
+
+            if (handle.Task.Program != null) {
+                await RunProgramAsync(handle).ConfigureAwait(false);
+            } else {
+                await RunTaskAsync(handle).ConfigureAwait(false);
+            }
+
             (status, message) = handle.IsCancelled ? (ObservationStatus.Cancelled, "cancelled") : (ObservationStatus.Completed, "done");
         } catch (OperationCanceledException) when (handle.IsCancelled) {
             (status, message) = (ObservationStatus.Cancelled, stopping.IsCancellationRequested ? "agent stopped" : "cancelled");
+        } catch (NotSupportedException e) {
+            (status, message) = (ObservationStatus.Skipped, e.Message);
         } catch (Exception e) {
             Log(Level.Error, $"task {id} failed: {e.Message}", e);
             (status, message) = (ObservationStatus.Failed, e.Message);
         }
 
+        handle.Closed = true;
         var final = StateMsg.TaskUpdate(id, status, status == ObservationStatus.Completed ? 1.0 : null, message, Now());
         await PublishAsync(final).ConfigureAwait(false);
 

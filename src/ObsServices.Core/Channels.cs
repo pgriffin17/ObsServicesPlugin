@@ -84,6 +84,35 @@ public static class Channels {
 
     public const string TaskFramesTotal = "frames_total";
 
+    // ---- sequencers (the `sequencer` component: software that runs programs on an instrument) ----
+
+    /// <summary>Library component id an agent that runs programs binds to.</summary>
+    public const string SequencerComponent = "sequencer";
+
+    public const string SequencerSoftware = "software";
+    public const string SequencerVersion = "version";
+    public const string SequencerProfile = "profile";
+
+    /// <summary><c>disconnected</c> | <c>idle</c> | <c>running</c>.</summary>
+    public const string SequencerState = "state";
+
+    public const string SequencerStateDisconnected = "disconnected";
+    public const string SequencerStateIdle = "idle";
+    public const string SequencerStateRunning = "running";
+
+    /// <summary>The loaded program: its name, or the service's program id when it is one of ours.</summary>
+    public const string SequencerProgram = "program";
+
+    public const string SequencerRunningItem = "running_item";
+
+    /// <summary>Mount entity id of the instrument the sequencer drives.</summary>
+    public const string SequencerInstrument = "instrument";
+
+    /// <summary>Installed add-ons, comma separated; a program digest's extensions are checked against it.</summary>
+    public const string SequencerExtensions = "extensions";
+
+    public const string SequencerTelemetryOnly = "telemetry_only";
+
     // ---- the site and the agent (built-in entities) ---------------------------------------------
 
     public const string SiteLstDeg = "lst_deg";

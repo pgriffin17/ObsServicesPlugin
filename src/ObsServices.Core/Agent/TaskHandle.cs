@@ -23,8 +23,15 @@ public sealed class TaskHandle {
 
     public bool IsCancelled => Cancellation.IsCancellationRequested;
 
+    /// <summary>Set once the final status is published; late progress reports are dropped rather than resurrecting the task.</summary>
+    internal volatile bool Closed;
+
     /// <summary>Report progress (0..1 of the planned exposure time) and optionally what is happening.</summary>
     public Task ProgressAsync(double fraction, string? message = null) {
+        if (Closed) {
+            return System.Threading.Tasks.Task.CompletedTask;
+        }
+
         var m = new StateMsg(agent.Now());
         m.Set(Task.Id, Channels.TaskStatus, ObservationStatus.Running.AsString());
         m.Set(Task.Id, Channels.TaskProgress, Math.Clamp(fraction, 0.0, 1.0));
@@ -38,6 +45,10 @@ public sealed class TaskHandle {
 
     /// <summary>Frames taken / planned, drawn next to the field on the dome.</summary>
     public Task FramesAsync(int done, int total) {
+        if (Closed) {
+            return System.Threading.Tasks.Task.CompletedTask;
+        }
+
         var m = new StateMsg(agent.Now());
         m.Set(Task.Id, Channels.TaskFramesDone, done);
         m.Set(Task.Id, Channels.TaskFramesTotal, total);

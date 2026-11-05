@@ -47,7 +47,20 @@ tests/ObsServicesPlugin.Tests N.I.N.A.-hosted tests; need the Windows desktop ru
 4. Tasks the service assigns run through N.I.N.A.: open the shutter, unpark, slew (J2000 in, N.I.N.A. transforms),
    change filter, expose through the imaging mediator and the normal image save pipeline, report frames and
    progress on the task entity. Cancel aborts the exposure. Commands stop, park, unpark, open/close roof and
-   safe map to the matching mediator calls; `set_time_scale` is acked as unsupported.
+   safe map to the matching mediator calls; `set_time_scale` is acked as unsupported. Tasks that carry a
+   program run through N.I.N.A.'s sequencer instead (next section).
+
+## Programs and the sequencer entity (protocol v4)
+
+The service can hand N.I.N.A. one of its **programs** instead of a declarative task: a sequence, target or
+template file uploaded to the organisation (`/api/orgs/{org}/programs`) and queued on the site. The plugin
+announces `program:nina.sequence`, `program:nina.target` and `program:nina.template`; a target or template is
+injected into the advanced sequencer's target area, a whole sequence replaces the loaded one (off until *Allow
+whole-sequence programs* is ticked). Add a **`sequencer`** component to the site's assembly and the plugin
+publishes N.I.N.A.'s state to it: software, version, profile, idle/running, the loaded program, the running
+item, installed plugin assemblies, and the telemetry-only switch, which the service can flip through a `set`.
+`set` also slews the mount (`ra_deg`/`dec_deg`), parks or stops it (`mode`), changes filter and focus, and
+opens or closes the roof; the agent declares exactly those as writable. See `docs/PLAN.md`.
 
 ## When the service is unreachable
 

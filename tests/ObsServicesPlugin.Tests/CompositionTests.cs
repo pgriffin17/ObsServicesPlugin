@@ -28,6 +28,7 @@ namespace ObsServicesPlugin.Tests {
             container.ComposeExportedValue(Mock.Of<IFilterWheelMediator>());
             container.ComposeExportedValue(Mock.Of<IDomeMediator>());
             container.ComposeExportedValue(Mock.Of<IFocuserMediator>());
+            container.ComposeExportedValue(Mock.Of<NINA.Sequencer.Interfaces.Mediator.ISequenceMediator>());
             container.ComposeExportedValue(Mock.Of<IImageSaveMediator>());
             container.ComposeExportedValue(Mock.Of<IOptionsVM>());
             container.ComposeExportedValue(Mock.Of<IMessageBroker>());

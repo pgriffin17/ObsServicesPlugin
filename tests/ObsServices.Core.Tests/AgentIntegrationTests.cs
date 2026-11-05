@@ -15,21 +15,25 @@ internal sealed class TestAgent : ObservatoryAgent {
     public FakeCamera Camera { get; }
     public FakeFilterWheel Wheel { get; }
     public FakeRoof Roof { get; }
+    public FakeFocuser Focuser { get; }
+    public FakeSequencerHost? Sequencer { get; }
     public List<string> Logged { get; } = new();
 
-    private TestAgent(string baseUrl, string siteId, string token, FakeClock clock, FakeMount mount, FakeCamera camera, FakeFilterWheel wheel, FakeRoof roof, ObservatoryAgentOptions? options)
-        : base(baseUrl, siteId, token, new DeviceSet { Mount = mount, Camera = camera, FilterWheel = wheel, Roof = roof, Focuser = new FakeFocuser() }, options) {
+    private TestAgent(string baseUrl, string siteId, string token, FakeClock clock, FakeMount mount, FakeCamera camera, FakeFilterWheel wheel, FakeRoof roof, FakeFocuser focuser, FakeSequencerHost? sequencer, ObservatoryAgentOptions? options)
+        : base(baseUrl, siteId, token, new DeviceSet { Mount = mount, Camera = camera, FilterWheel = wheel, Roof = roof, Focuser = focuser, Sequencer = sequencer }, options) {
         Clock = clock;
         Mount = mount;
         Camera = camera;
         Wheel = wheel;
         Roof = roof;
+        Focuser = focuser;
+        Sequencer = sequencer;
         Name = "obsservices-test";
     }
 
-    public static TestAgent Create(string baseUrl, string siteId, string token, double latDeg, double lonDeg, ObservatoryAgentOptions? options = null) {
+    public static TestAgent Create(string baseUrl, string siteId, string token, double latDeg, double lonDeg, ObservatoryAgentOptions? options = null, bool withSequencer = false) {
         var clock = new FakeClock();
-        return new TestAgent(baseUrl, siteId, token, clock, new FakeMount(clock, latDeg, lonDeg), new FakeCamera(clock), new FakeFilterWheel(clock, "L", "R", "G", "B", "Ha"), new FakeRoof(clock), options);
+        return new TestAgent(baseUrl, siteId, token, clock, new FakeMount(clock, latDeg, lonDeg), new FakeCamera(clock), new FakeFilterWheel(clock, "L", "R", "G", "B", "Ha"), new FakeRoof(clock), new FakeFocuser(), withSequencer ? new FakeSequencerHost(clock) : null, options);
     }
 
     // a device of the agent's own, beside what the manifest lists: the hello/annotation path
@@ -144,6 +148,43 @@ public class AgentIntegrationTests {
                 state = await WaitForState(siteId, s => s["latest"]![Channels.Channel(mount, Channels.MountMode)]?.GetValue<string>() == Channels.MountModeParked, TimeSpan.FromSeconds(5));
                 Assert.That(state["latest"]![Channels.Channel(mount, Channels.MountMode)]!.GetValue<string>(), Is.EqualTo(Channels.MountModeParked));
 
+                // the agent annotated the wheel's carousel and what it can set; the service merged it into the manifest
+                var entities = await ServerFixture.GetAsync($"/api/sites/{siteId}/entities");
+                var mountEntity = entities["entities"]!.AsArray().First(e => e!["id"]!.GetValue<string>() == mount)!;
+                Assert.That(mountEntity["properties"]!.AsArray().Any(p => p!["name"]!.GetValue<string>() == "ra_deg" && p["writable"]?.GetValue<bool>() == true), Is.True, "ra_deg is settable");
+                // the first instrument of the observatory assembly has no wheel or focuser under it; the binding says so
+                Assert.That(agent.Binding.FilterWheelEntity, Is.Null, "no wheel under the first mount");
+                Assert.That(agent.Binding.FocuserEntity, Is.EqualTo(EntityId("ota")), "the Newtonian's focus joint makes it the focuser");
+
+                // a set: slew by ra_deg/dec_deg is accepted, then done with what the mount reached
+                var set = await ServerFixture.PostAsync($"/api/sites/{siteId}/set", new { entity = mount, values = new { ra_deg = 37.95, dec_deg = 80.0 } });
+                var setId = set["id"]!.GetValue<string>();
+                Assert.That(set["status"]!.GetValue<string>(), Is.AnyOf("pending", "accepted"));
+                var setDone = await WaitForSet(siteId, setId, TimeSpan.FromSeconds(10));
+                Assert.That(setDone["status"]!.GetValue<string>(), Is.EqualTo("done"), setDone.ToJsonString());
+                Assert.That(setDone["observed"]!["dec_deg"]!.GetValue<double>(), Is.EqualTo(80.0).Within(0.01));
+                Assert.That(setDone["observed"]!["mode"]!.GetValue<string>(), Is.EqualTo("tracking"));
+                Assert.That(agent.Mount.Calls, Does.Contain("slew 37.95 80"));
+
+                // mode through a set: parked, with the mode observed
+                set = await ServerFixture.PostAsync($"/api/sites/{siteId}/set", new { entity = mount, values = new { mode = "parked" } });
+                setDone = await WaitForSet(siteId, set["id"]!.GetValue<string>(), TimeSpan.FromSeconds(10));
+                Assert.That(setDone["status"]!.GetValue<string>(), Is.EqualTo("done"), setDone.ToJsonString());
+                Assert.That(setDone["observed"]!["mode"]!.GetValue<string>(), Is.EqualTo("parked"));
+                Assert.That(agent.Mount.Read().State, Is.EqualTo(MountState.Parked));
+
+                // the focuser, through the OTA entity that carries the focus joint
+                var focuserSet = await ServerFixture.PostAsync($"/api/sites/{siteId}/set", new { entity = agent.Binding.FocuserEntity, values = new { focus = 4321 } });
+                setDone = await WaitForSet(siteId, focuserSet["id"]!.GetValue<string>(), TimeSpan.FromSeconds(10));
+                Assert.That(setDone["status"]!.GetValue<string>(), Is.EqualTo("done"), setDone.ToJsonString());
+                Assert.That(agent.Focuser.Position, Is.EqualTo(4321));
+
+                // the roof through its travel joint
+                set = await ServerFixture.PostAsync($"/api/sites/{siteId}/set", new { entity = shed, values = new { roof = 2400 } });
+                setDone = await WaitForSet(siteId, set["id"]!.GetValue<string>(), TimeSpan.FromSeconds(10));
+                Assert.That(setDone["status"]!.GetValue<string>(), Is.EqualTo("done"), setDone.ToJsonString());
+                Assert.That(agent.Roof.Read(), Is.EqualTo(RoofActivity.Open));
+
                 // an unsupported command is acked as such, not dropped
                 await ServerFixture.PostAsync($"/api/sites/{siteId}/commands", new { kind = "set_time_scale", factor = 10 });
                 state = await WaitForState(siteId, s => s["events"]!.AsArray().Any(e => e!["message"]!.GetValue<string>().Contains("not supported")), TimeSpan.FromSeconds(5));
@@ -246,6 +287,22 @@ public class AgentIntegrationTests {
             }
         } finally {
             await ServerFixture.DeleteAsync($"/api/sites/{siteId}");
+        }
+    }
+
+    private static async Task<JsonNode> WaitForSet(string siteId, string requestId, TimeSpan timeout) {
+        var deadline = DateTime.UtcNow + timeout;
+        JsonNode rec;
+
+        while (true) {
+            rec = await ServerFixture.GetAsync($"/api/sites/{siteId}/set/{requestId}");
+            var status = rec["status"]!.GetValue<string>();
+
+            if (status is not ("pending" or "accepted") || DateTime.UtcNow > deadline) {
+                return rec;
+            }
+
+            await Task.Delay(150);
         }
     }
 

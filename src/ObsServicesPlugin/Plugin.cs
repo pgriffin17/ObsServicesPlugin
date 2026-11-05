@@ -8,6 +8,7 @@ using NINA.Equipment.Interfaces.Mediator;
 using NINA.Plugin;
 using NINA.Plugin.Interfaces;
 using NINA.Profile.Interfaces;
+using NINA.Sequencer.Interfaces.Mediator;
 using NINA.WPF.Base.Interfaces.Mediator;
 using ObsServices.Core.Agent;
 using ObsServices.Core.Devices;
@@ -25,6 +26,7 @@ namespace ObsServicesPlugin;
 public sealed class Plugin : PluginBase, INotifyPropertyChanged {
     private readonly IProfileService profiles;
     private readonly IDeviceSet devices;
+    private readonly NinaSequencerHost? sequencerHost;
     private readonly object gate = new();
     private NinaSiteAgent? agent;
     private ObservatoryAgentOptions? agentOptions;
@@ -34,20 +36,25 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
     private string lastMessage = string.Empty;
 
     [ImportingConstructor]
-    public Plugin(IProfileService profiles, ITelescopeMediator telescope, ICameraMediator camera, IImagingMediator imaging, IImageSaveMediator imageSave, IFilterWheelMediator filterWheel, IDomeMediator dome, IFocuserMediator focuser)
-        : this(profiles, new DeviceSet {
+    public Plugin(IProfileService profiles, ITelescopeMediator telescope, ICameraMediator camera, IImagingMediator imaging, IImageSaveMediator imageSave, IFilterWheelMediator filterWheel, IDomeMediator dome, IFocuserMediator focuser, ISequenceMediator sequence)
+        : this(profiles, Compose(profiles, telescope, camera, imaging, imageSave, filterWheel, dome, focuser, sequence)) {
+    }
+
+    private static DeviceSet Compose(IProfileService profiles, ITelescopeMediator telescope, ICameraMediator camera, IImagingMediator imaging, IImageSaveMediator imageSave, IFilterWheelMediator filterWheel, IDomeMediator dome, IFocuserMediator focuser, ISequenceMediator sequence) =>
+        new() {
             Mount = new NinaMount(telescope),
             Camera = new NinaCamera(camera, imaging, imageSave, profiles),
             FilterWheel = new NinaFilterWheel(filterWheel, profiles),
             Roof = new NinaRoof(dome),
             Focuser = new NinaFocuser(focuser),
-        }) {
-    }
+            Sequencer = new NinaSequencerHost(sequence, imageSave, profiles),
+        };
 
     /// <summary>For tests and other hosts: any device set.</summary>
     public Plugin(IProfileService profiles, IDeviceSet devices) {
         this.profiles = profiles;
         this.devices = devices;
+        sequencerHost = devices.Sequencer as NinaSequencerHost;
         Settings = new Settings(profiles, Guid.Parse(Identifier));
         ConnectCommand = new AsyncRelayCommand(ConnectAsync, () => !IsConnected);
         DisconnectCommand = new AsyncRelayCommand(DisconnectAsync, () => IsConnected);
@@ -131,6 +138,28 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
         set { Settings.RoofOpenJointValue = value; Raise(); }
     }
 
+    public string Sequencer {
+        get => Settings.Sequencer;
+        set { Settings.Sequencer = value; Raise(); }
+    }
+
+    /// <summary>Takes effect immediately.</summary>
+    public bool AllowWholeSequences {
+        get => Settings.AllowWholeSequences;
+        set {
+            Settings.AllowWholeSequences = value;
+
+            if (sequencerHost != null) {
+                sequencerHost.AllowWholeSequences = value;
+            }
+
+            Raise();
+        }
+    }
+
+    /// <summary>The program formats this N.I.N.A. announces to the service.</summary>
+    public string ProgramFormats => devices.Sequencer == null ? "none" : string.Join(", ", devices.Sequencer.Formats);
+
     // ---- lifecycle ---------------------------------------------------------------------------------
 
     public override Task Initialize() {
@@ -162,13 +191,23 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
 
             var options = new ObservatoryAgentOptions {
                 InstrumentKey = string.IsNullOrWhiteSpace(Settings.Instrument) ? null : Settings.Instrument,
+                SequencerKey = string.IsNullOrWhiteSpace(Settings.Sequencer) ? null : Settings.Sequencer,
                 RoofOpenJointValue = Settings.RoofOpenJointValue,
                 TelemetryOnly = Settings.TelemetryOnly,
             };
+
+            if (sequencerHost != null) {
+                sequencerHost.AllowWholeSequences = Settings.AllowWholeSequences;
+            }
             var a = new NinaSiteAgent(Settings.ServiceUrl, Settings.SiteId, Settings.AgentToken, devices, options, Version?.ToString() ?? "0.0.0.0") {
                 StateInterval = TimeSpan.FromSeconds(Settings.StateIntervalSeconds),
             };
             a.Logged += (level, message) => LastMessage = $"{level}: {message}";
+            a.TelemetryOnlyChanged += on => {
+                Settings.TelemetryOnly = on;
+                Raise(nameof(TelemetryOnly));
+                Raise(nameof(ModeDescription));
+            };
             runCts = new CancellationTokenSource();
             agentOptions = options;
             agent = a;
@@ -246,7 +285,7 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
         Settings = new Settings(profiles, Guid.Parse(Identifier));
         Raise(nameof(Settings));
 
-        foreach (var name in new[] { nameof(ServiceUrl), nameof(SiteId), nameof(AgentToken), nameof(Instrument), nameof(AutoConnect), nameof(TelemetryOnly), nameof(ModeDescription), nameof(StateIntervalSeconds), nameof(RoofOpenJointValue) }) {
+        foreach (var name in new[] { nameof(ServiceUrl), nameof(SiteId), nameof(AgentToken), nameof(Instrument), nameof(Sequencer), nameof(AllowWholeSequences), nameof(AutoConnect), nameof(TelemetryOnly), nameof(ModeDescription), nameof(StateIntervalSeconds), nameof(RoofOpenJointValue) }) {
             Raise(name);
         }
 

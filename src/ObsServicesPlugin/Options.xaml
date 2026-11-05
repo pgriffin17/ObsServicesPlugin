@@ -23,6 +23,8 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Service URL" />
@@ -36,6 +38,16 @@
 
                 <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Instrument (optional)" />
                 <TextBox Grid.Row="3" Grid.Column="1" Margin="0,4" Text="{Binding Instrument, UpdateSourceTrigger=LostFocus}" ToolTip="Which of the site's instruments this N.I.N.A. drives; empty for the first" />
+
+                <TextBlock Grid.Row="9" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Sequencer (optional)" />
+                <TextBox Grid.Row="9" Grid.Column="1" Margin="0,4" Text="{Binding Sequencer, UpdateSourceTrigger=LostFocus}" ToolTip="Which of the site's sequencer components this N.I.N.A. publishes itself to; empty for the first. Add a `sequencer` to the site's assembly to see N.I.N.A.'s state and run programs." />
+                <TextBlock Grid.Row="10" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Programs" />
+                <StackPanel Grid.Row="10" Grid.Column="1" Margin="0,4">
+                    <TextBlock Opacity="0.8" TextWrapping="Wrap">
+                        <Run Text="Announced formats: " /><Run Text="{Binding ProgramFormats, Mode=OneWay}" />
+                    </TextBlock>
+                    <CheckBox Margin="0,6,0,0" Content="Allow whole-sequence programs (nina.sequence replaces the loaded sequence and runs it)" IsChecked="{Binding AllowWholeSequences}" ToolTip="Target and template programs are always allowed: they are added to the target area. A whole sequence replaces start, targets and end." />
+                </StackPanel>
 
                 <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="State interval (s)" />
                 <TextBox Grid.Row="4" Grid.Column="1" Margin="0,4" Width="80" HorizontalAlignment="Left" Text="{Binding StateIntervalSeconds, UpdateSourceTrigger=LostFocus}" />
