@@ -1,4 +1,5 @@
 using ObsServices.Core.Devices;
+using ObsServices.Core.Imaging;
 using ObsServices.Core.Protocol;
 
 namespace ObsServices.Core.Agent;
@@ -64,6 +65,15 @@ public class ObservatoryAgent : SiteAgent {
     /// <summary>How the manifest was bound to the devices; empty until <c>welcome</c>.</summary>
     public SiteBinding Binding { get; private set; } = SiteBinding.Empty;
 
+    /// <summary>Name of the device entity the agent declares for its camera when the instrument's optical train ends on no sensor.</summary>
+    public const string FallbackCameraDevice = "camera";
+
+    /// <summary>
+    /// The entity the camera publishes to and frames are announced from: the instrument's sensor, or a
+    /// device entity of the agent's own when the assembly has none there. Null without a camera device.
+    /// </summary>
+    public string? CameraEntity => Binding.CameraEntity ?? (devices.Camera != null && Binding.MountEntity != null ? DeviceId(FallbackCameraDevice) : null);
+
     /// <summary>The J2000 target the mount was last asked to point at, for the aim reticle.</summary>
     public (double Ra, double Dec)? CurrentTarget {
         get { lock (gate) return target; }
@@ -103,6 +113,21 @@ public class ObservatoryAgent : SiteAgent {
                 PropertyInfo.Text(Channels.MountMode, new[] { Channels.MountModeParked, Channels.MountModeSlewing, Channels.MountModeTracking, Channels.MountModeStopped }, "Set parked, stopped or tracking").AsWritable(),
             };
             yield return new Entity { Id = b.MountEntity, Kind = EntityKind.Component, Properties = props };
+        }
+
+        if (b.CameraEntity == null && CameraEntity is { } fallback) {
+            // the assembly's imaging train ends on nothing: frames still need a camera entity to belong to
+            yield return new Entity {
+                Id = fallback,
+                Kind = EntityKind.Device,
+                Name = FallbackCameraDevice,
+                Properties = {
+                    PropertyInfo.Text(Channels.CameraState, new[] { Channels.CameraStateIdle, Channels.CameraStateReadingOut }, "idle | exposing <filter> | reading out"),
+                    PropertyInfo.Number(Channels.CameraExposureS, "s", "Length of the exposure in progress"),
+                    PropertyInfo.Number(Channels.CameraExposureRemainingS, "s", "Time left in the exposure"),
+                    PropertyInfo.Number(Channels.CameraTemperatureC, "C", "Sensor temperature"),
+                },
+            };
         }
 
         if (b.FilterWheelEntity != null && devices.FilterWheel is { } wheel) {
@@ -151,17 +176,17 @@ public class ObservatoryAgent : SiteAgent {
             PublishMount(m, b, mount);
         }
 
-        if (b.CameraEntity != null && devices.Camera?.Read() is { Connected: true } cam) {
-            m.Set(b.CameraEntity, Channels.CameraState, cam.Activity switch {
+        if (CameraEntity is { } cameraEntity && devices.Camera?.Read() is { Connected: true } cam) {
+            m.Set(cameraEntity, Channels.CameraState, cam.Activity switch {
                 CameraActivity.Exposing => Channels.CameraStateExposing(devices.FilterWheel?.CurrentFilter ?? "L"),
                 CameraActivity.ReadingOut => Channels.CameraStateReadingOut,
                 _ => Channels.CameraStateIdle,
             });
-            m.Set(b.CameraEntity, Channels.CameraExposureS, cam.ExposureSeconds);
-            m.Set(b.CameraEntity, Channels.CameraExposureRemainingS, cam.ExposureRemainingSeconds);
+            m.Set(cameraEntity, Channels.CameraExposureS, cam.ExposureSeconds);
+            m.Set(cameraEntity, Channels.CameraExposureRemainingS, cam.ExposureRemainingSeconds);
 
             if (cam.TemperatureC is { } t) {
-                m.Set(b.CameraEntity, Channels.CameraTemperatureC, t);
+                m.Set(cameraEntity, Channels.CameraTemperatureC, t);
             }
         }
 
@@ -261,6 +286,43 @@ public class ObservatoryAgent : SiteAgent {
                 m.Set(entity, Channels.MountTargetAzDeg, az);
             }
         }
+    }
+
+    // ---- frames -----------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A frame the host took: fill in what the binding knows (camera and mount entities, the running task,
+    /// the bound wheel's filter) where <paramref name="info"/> leaves it open, then announce it through the
+    /// spool. Hosts call this from their image-saved hook; frames taken outside any task are announced too.
+    /// </summary>
+    public Task<string> AnnounceFrameAsync(byte[] fits, FrameInfo info) => AnnounceImageAsync(fits, Complete(info));
+
+    /// <summary>The same for an unsigned 16-bit frame still in memory, <paramref name="fits"/> being its encoding.</summary>
+    public Task<string> AnnounceFrameAsync(ReadOnlyMemory<ushort> pixels, int width, int height, byte[] fits, FrameInfo info) =>
+        AnnounceImageAsync(pixels, width, height, fits, Complete(info));
+
+    /// <summary>The frame info with the binding's entity ids filled in where the host left them open.</summary>
+    public FrameInfo Complete(FrameInfo info) {
+        var b = Binding;
+        info.Camera ??= CameraEntity ?? throw new InvalidOperationException("no camera entity to announce frames from (the agent is not bound to an instrument)");
+        info.Instrument ??= b.MountEntity;
+
+        if (info.TaskId == null) {
+            // frames taken while exactly one task runs belong to it (device tasks hold the instrument lock; programs too)
+            var running = RunningTasks;
+            info.TaskId = running.Count == 1 ? running[0] : null;
+        }
+
+        if (info.Filters.Count == 0 && b.FilterWheelEntity != null) {
+            var filter = info.Filter ?? devices.FilterWheel?.CurrentFilter;
+
+            if (!string.IsNullOrEmpty(filter)) {
+                info.Filters[b.FilterWheelEntity] = filter;
+            }
+        }
+
+        info.Filter ??= info.Filters.Values.FirstOrDefault();
+        return info;
     }
 
     // ---- tasks ------------------------------------------------------------------------------------

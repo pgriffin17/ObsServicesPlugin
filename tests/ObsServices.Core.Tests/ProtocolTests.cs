@@ -39,7 +39,7 @@ public class ProtocolTests {
         var root = doc.RootElement;
 
         Assert.That(root.GetProperty("type").GetString(), Is.EqualTo("hello"));
-        Assert.That(root.GetProperty("protocol").GetInt32(), Is.EqualTo(4));
+        Assert.That(root.GetProperty("protocol").GetInt32(), Is.EqualTo(6));
         Assert.That(root.GetProperty("entities")[0].GetProperty("kind").GetString(), Is.EqualTo("device"));
         Assert.That(root.GetProperty("entities")[0].GetProperty("properties")[0].GetProperty("type").GetString(), Is.EqualTo("number"));
         Assert.That(root.GetProperty("entities")[0].GetProperty("properties")[0].GetProperty("unit").GetString(), Is.EqualTo("C"));
@@ -176,7 +176,62 @@ public class ProtocolTests {
 
         var minimal = (TaskAssign)ProtocolJson.DecodeDown("""{"type":"task_assign","id":"t","name":"n","target":{"name":"x","ra_deg":0,"dec_deg":0},"program":{"id":"p","format":"python.script"}}""");
         Assert.That((minimal.Task.Program!.Revision, minimal.Task.Program.Sha256, minimal.Task.Program.Body), Is.EqualTo((0L, "", (string?)null)));
-        Assert.That(ProtocolJson.Version, Is.EqualTo(4));
+        Assert.That(ProtocolJson.Version, Is.EqualTo(6));
+    }
+
+    [Test]
+    public void ImageMessagesAreV6() {
+        var inventory = new ImageInventory { Frames = { new InventoryFrame { Hash = new string('a', 64), Bytes = 2880 } }, FreeBytes = 1L << 40 };
+        var json = ProtocolJson.Encode(inventory);
+        Assert.That(json, Is.EqualTo("{\"type\":\"image_inventory\",\"frames\":[{\"hash\":\"" + new string('a', 64) + "\",\"bytes\":2880}],\"free_bytes\":1099511627776}"));
+        Assert.That(ProtocolJson.DecodeUp(json), Is.InstanceOf<ImageInventory>());
+
+        var captured = new ImageCaptured { Hash = new string('b', 64), Bytes = 10, Kind = ImageKind.Dark, Camera = "cam", CapturedAt = 1.5, ExposureS = 2, Width = 2, Height = 1, Bitpix = 16, Filters = { ["w"] = "Ha" }, Stats = new ImageStats { Median = 500 } };
+        json = ProtocolJson.Encode(captured);
+        Assert.That(json, Does.StartWith("{\"type\":\"image_captured\",\"hash\":\"bbbb"));
+        Assert.That(json, Does.Contain("\"kind\":\"dark\"").And.Contain("\"filters\":{\"w\":\"Ha\"}").And.Contain("\"stats\":{\"median\":500}"));
+        Assert.That(json, Does.Not.Contain("preview_png").And.Not.Contain("task_id"), "nulls are left out");
+        var back = (ImageCaptured)ProtocolJson.DecodeUp(json);
+        Assert.That((back.Kind, back.Filters["w"], back.Stats!.Median, back.Stats.Sigma), Is.EqualTo((ImageKind.Dark, "Ha", 500.0, (double?)null)));
+
+        var grant = (ImageGrant)ProtocolJson.DecodeDown("{\"type\":\"image_grant\",\"hashes\":[\"h1\"],\"upload_url\":\"http://x/agent/s/images/\",\"token\":\"tcg_1\",\"expires_at\":99.5,\"max_concurrency\":2,\"max_chunk\":8388608}");
+        Assert.That((grant.Hashes[0], grant.UploadUrl, grant.Token, grant.ExpiresAt, grant.MaxConcurrency, grant.MaxChunk, grant.RateBps), Is.EqualTo(("h1", "http://x/agent/s/images/", "tcg_1", 99.5, 2, 8388608L, (long?)null)));
+        var release = (ImageRelease)ProtocolJson.DecodeDown("{\"type\":\"image_release\",\"hashes\":[\"h1\",\"h2\"]}");
+        Assert.That(release.Hashes, Is.EqualTo(new[] { "h1", "h2" }));
+
+        Assert.That(Images.IsHash(new string('0', 64)), Is.True);
+        Assert.That(Images.IsHash(new string('A', 64)), Is.False, "lowercase only");
+        Assert.That(ImageKindExtensions.ParseImageKind("DARKFLAT"), Is.EqualTo(ImageKind.Dark));
+        Assert.That(ImageKindExtensions.ParseImageKind("SNAPSHOT"), Is.EqualTo(ImageKind.Other));
+        Assert.That(ProtocolJson.Version, Is.EqualTo(6));
+    }
+
+    [Test]
+    public void MovingTargetsAreV5() {
+        // a v4 target (no body) still parses and writes no body
+        var plain = (TaskAssign)ProtocolJson.DecodeDown("""{"type":"task_assign","id":"t","name":"n","target":{"name":"M31","ra_deg":10,"dec_deg":41}}""");
+        Assert.That(plain.Task.Target.Body, Is.Null);
+        Assert.That(plain.Task.Target.Capability, Is.Null);
+        Assert.That(ProtocolJson.Encode(plain), Does.Not.Contain("body"));
+
+        var sat = (TaskAssign)ProtocolJson.DecodeDown("""{"type":"task_assign","id":"t","name":"ISS","target":{"name":"ISS","ra_deg":1,"dec_deg":2,"body":{"kind":"tle","norad_id":25544,"line1":"1 25544U","line2":"2 25544","epoch":1.5}}}""");
+        var b = sat.Task.Target.Body!;
+        Assert.That((b.Kind, b.NoradId, b.Line1, b.Line2, b.Epoch), Is.EqualTo(("tle", 25544L, "1 25544U", "2 25544", 1.5)));
+        Assert.That(sat.Task.Target.Capability, Is.EqualTo("target:tle"));
+        Assert.That(sat.Task.RequiredCapabilities, Is.EqualTo(new[] { "target:tle" }));
+        Assert.That(Body.CapabilityKind("target:major"), Is.EqualTo("major"));
+        Assert.That(Body.CapabilityKind("program:x"), Is.Null);
+
+        var moon = (TaskAssign)ProtocolJson.DecodeDown("""{"type":"task_assign","id":"t","name":"Moon","target":{"name":"Moon","ra_deg":1,"dec_deg":2,"body":{"kind":"major","body":"moon"}}}""");
+        Assert.That(moon.Task.Target.Body!.BodyName, Is.EqualTo("moon"));
+        Assert.That(ProtocolJson.Encode(moon), Does.Contain("\"body\":{\"kind\":\"major\",\"body\":\"moon\"}"));
+
+        var eph = (TaskAssign)ProtocolJson.DecodeDown("""{"type":"task_assign","id":"t","name":"c","target":{"name":"c","ra_deg":359,"dec_deg":10,"body":{"kind":"ephemeris","points":[{"t":0,"ra_deg":359,"dec_deg":10},{"t":100,"ra_deg":1,"dec_deg":12}]}}}""");
+        Assert.That(eph.Task.Target.Body!.Interpolate(50), Is.EqualTo((0.0, 11.0)));
+        Assert.That(eph.Task.Target.Body!.Interpolate(101), Is.Null);
+
+        var altaz = (TaskAssign)ProtocolJson.DecodeDown("""{"type":"task_assign","id":"t","name":"f","target":{"name":"f","ra_deg":0,"dec_deg":0,"body":{"kind":"altaz","alt_deg":70,"az_deg":0}}}""");
+        Assert.That((altaz.Task.Target.Body!.AltDeg, altaz.Task.Target.Body!.AzDeg), Is.EqualTo((70.0, 0.0)));
     }
 
     [Test]

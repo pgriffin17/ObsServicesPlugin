@@ -113,6 +113,25 @@ public static class Channels {
 
     public const string SequencerTelemetryOnly = "telemetry_only";
 
+    // ---- uploaders (the `uploader` component: the frame spool on the control computer) ----------
+
+    /// <summary>Library component id an agent with a frame spool publishes its telemetry to.</summary>
+    public const string UploaderComponent = "uploader";
+
+    /// <summary>Frames announced but not yet received by the service.</summary>
+    public const string UploaderQueuedFrames = "queued_frames";
+
+    public const string UploaderQueuedBytes = "queued_bytes";
+
+    /// <summary>Free space on the spool's disk.</summary>
+    public const string UploaderFreeBytes = "free_bytes";
+
+    /// <summary>Upload throughput over the last minute.</summary>
+    public const string UploaderRateBps = "rate_bps";
+
+    /// <summary>Age of the oldest frame still waiting.</summary>
+    public const string UploaderOldestUnsentS = "oldest_unsent_s";
+
     // ---- the site and the agent (built-in entities) ---------------------------------------------
 
     public const string SiteLstDeg = "lst_deg";

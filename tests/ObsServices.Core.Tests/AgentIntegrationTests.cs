@@ -18,6 +18,10 @@ internal sealed class TestAgent : ObservatoryAgent {
     public FakeFocuser Focuser { get; }
     public FakeSequencerHost? Sequencer { get; }
     public List<string> Logged { get; } = new();
+    public List<string> Released { get; } = new();
+
+    /// <summary>Leave grants unanswered, to leave frames in the spool for a later agent to pick up.</summary>
+    public bool IgnoreGrants { get; set; }
 
     private TestAgent(string baseUrl, string siteId, string token, FakeClock clock, FakeMount mount, FakeCamera camera, FakeFilterWheel wheel, FakeRoof roof, FakeFocuser focuser, FakeSequencerHost? sequencer, ObservatoryAgentOptions? options)
         : base(baseUrl, siteId, token, new DeviceSet { Mount = mount, Camera = camera, FilterWheel = wheel, Roof = roof, Focuser = focuser, Sequencer = sequencer }, options) {
@@ -31,9 +35,28 @@ internal sealed class TestAgent : ObservatoryAgent {
         Name = "obsservices-test";
     }
 
-    public static TestAgent Create(string baseUrl, string siteId, string token, double latDeg, double lonDeg, ObservatoryAgentOptions? options = null, bool withSequencer = false) {
+    public static TestAgent Create(string baseUrl, string siteId, string token, double latDeg, double lonDeg, ObservatoryAgentOptions? options = null, bool withSequencer = false, string? spoolDir = null) {
         var clock = new FakeClock();
-        return new TestAgent(baseUrl, siteId, token, clock, new FakeMount(clock, latDeg, lonDeg), new FakeCamera(clock), new FakeFilterWheel(clock, "L", "R", "G", "B", "Ha"), new FakeRoof(clock), new FakeFocuser(), withSequencer ? new FakeSequencerHost(clock) : null, options);
+        var camera = new FakeCamera(clock);
+        var agent = new TestAgent(baseUrl, siteId, token, clock, new FakeMount(clock, latDeg, lonDeg), camera, new FakeFilterWheel(clock, "L", "R", "G", "B", "Ha"), new FakeRoof(clock), new FakeFocuser(), withSequencer ? new FakeSequencerHost(clock) : null, options);
+
+        if (spoolDir != null) {
+            // the host's image-saved hook: every frame the camera reads out is announced through the spool
+            agent.Spool = new ObsServices.Core.Imaging.FrameSpool(spoolDir);
+            camera.FrameTaken = (pixels, w, h, fits, info) => agent.AnnounceFrameAsync(pixels, w, h, fits, info);
+        }
+
+        return agent;
+    }
+
+    protected override Task OnImageGrantAsync(ObsServices.Core.Protocol.ImageGrant grant) => IgnoreGrants ? Task.CompletedTask : base.OnImageGrantAsync(grant);
+
+    protected override Task OnImageReleasedAsync(IReadOnlyList<ObsServices.Core.Imaging.SpoolEntry> entries) {
+        lock (Released) {
+            Released.AddRange(entries.Select(e => e.Hash));
+        }
+
+        return Task.CompletedTask;
     }
 
     // a device of the agent's own, beside what the manifest lists: the hello/annotation path

@@ -2,8 +2,96 @@ using System.Text.Json.Serialization;
 
 namespace ObsServices.Core.Protocol;
 
+/// <summary>
+/// Where to point: J2000 coordinates and, for a target that moves, a <see cref="Body"/> saying how (the
+/// coordinates are then its reference position).
+/// </summary>
 public sealed class Target {
     public string Name { get; set; } = string.Empty;
+
+    public double RaDeg { get; set; }
+
+    public double DecDeg { get; set; }
+
+    public Body? Body { get; set; }
+
+    /// <summary>The capability an agent needs to take this target as given (<c>target:&lt;kind&gt;</c>), if it moves.</summary>
+    [JsonIgnore]
+    public string? Capability => Body == null ? null : Body.Capability(Body.Kind);
+}
+
+/// <summary>
+/// How a target moves. <see cref="Kind"/> is <c>altaz</c>, <c>major</c>, <c>tle</c> or <c>ephemeris</c>; the other
+/// properties belong to one kind each. An agent takes a kind natively when its <c>hello</c> lists
+/// <c>target:&lt;kind&gt;</c>; otherwise the service hands it an <c>ephemeris</c> table (if it lists
+/// <c>target:ephemeris</c>) or, for the slow kinds, a fixed position at the planned start. Satellites wait for an
+/// agent that can follow them.
+/// </summary>
+public sealed class Body {
+    public string Kind { get; set; } = string.Empty;
+
+    /// <summary><c>altaz</c>: a fixed direction over the site.</summary>
+    public double? AltDeg { get; set; }
+
+    public double? AzDeg { get; set; }
+
+    /// <summary><c>major</c>: <c>sun</c>, <c>moon</c> or a planet by lower-case name.</summary>
+    [JsonPropertyName("body")]
+    public string? BodyName { get; set; }
+
+    /// <summary><c>tle</c>: NORAD catalogue number; the element lines are present on assignment.</summary>
+    public long? NoradId { get; set; }
+
+    public string? Line1 { get; set; }
+
+    public string? Line2 { get; set; }
+
+    /// <summary>Epoch of the element lines, unix seconds.</summary>
+    public double? Epoch { get; set; }
+
+    /// <summary><c>ephemeris</c>: a time-tagged J2000 path to interpolate.</summary>
+    public List<EphemerisPoint>? Points { get; set; }
+
+    /// <summary>The capability an agent declares to take targets of a body kind as given.</summary>
+    public static string Capability(string kind) => "target:" + kind;
+
+    /// <summary>The body kind a <c>target:&lt;kind&gt;</c> capability names, or null for other capabilities.</summary>
+    public static string? CapabilityKind(string capability) =>
+        capability.StartsWith("target:", StringComparison.Ordinal) && capability.Length > 7 ? capability[7..] : null;
+
+    /// <summary>J2000 (ra, dec) at <paramref name="unixSeconds"/> by linear interpolation in <see cref="Points"/>; null outside the table.</summary>
+    public (double RaDeg, double DecDeg)? Interpolate(double unixSeconds) {
+        if (Points == null || Points.Count == 0 || unixSeconds < Points[0].T || unixSeconds > Points[^1].T) {
+            return null;
+        }
+
+        int lo = 0, hi = Points.Count - 1;
+        while (hi - lo > 1) {
+            var mid = (lo + hi) / 2;
+            if (Points[mid].T <= unixSeconds) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+
+        var a = Points[lo];
+        var b = Points[hi];
+        var f = b.T > a.T ? (unixSeconds - a.T) / (b.T - a.T) : 0.0;
+        var dra = b.RaDeg - a.RaDeg;
+        if (dra > 180) {
+            dra -= 360;
+        } else if (dra < -180) {
+            dra += 360;
+        }
+
+        var ra = (a.RaDeg + f * dra) % 360.0;
+        return (ra < 0 ? ra + 360.0 : ra, a.DecDeg + f * (b.DecDeg - a.DecDeg));
+    }
+}
+
+public sealed class EphemerisPoint {
+    public double T { get; set; }
 
     public double RaDeg { get; set; }
 
@@ -93,6 +181,14 @@ public sealed class ObservationTask {
     /// <summary>The capability an agent needs to run this task, when it is a program.</summary>
     [JsonIgnore]
     public string? NeedsCapability => Program == null ? null : ProgramRef.Capability(Program.Format);
+
+    /// <summary>
+    /// Every capability an agent needs to take this task exactly as written: the program's format and the
+    /// target's body kind (the service may still translate the target for an agent missing the latter).
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> RequiredCapabilities =>
+        new[] { NeedsCapability, Target.Capability }.Where(c => c != null).Select(c => c!).ToList();
 
     [JsonIgnore]
     public double TotalExposureSeconds => Sequence.Sum(e => e.Seconds * e.Count);

@@ -25,6 +25,12 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Service URL" />
@@ -48,6 +54,24 @@
                     </TextBlock>
                     <CheckBox Margin="0,6,0,0" Content="Allow whole-sequence programs (nina.sequence replaces the loaded sequence and runs it)" IsChecked="{Binding AllowWholeSequences}" ToolTip="Target and template programs are always allowed: they are added to the target area. A whole sequence replaces start, targets and end." />
                 </StackPanel>
+
+                <TextBlock Grid.Row="11" Grid.Column="0" Margin="0,12,0,4" VerticalAlignment="Top" Text="Frames" />
+                <StackPanel Grid.Row="11" Grid.Column="1" Margin="0,12,0,4">
+                    <CheckBox Content="Share the frames N.I.N.A. saves with the service" IsChecked="{Binding ShareFrames}" ToolTip="Every saved frame is announced (hash, header, statistics, a small preview) and uploaded when the service asks for it. Off: nothing about frames leaves this machine. Takes effect at the next connect." />
+                    <CheckBox Margin="0,6,0,0" Content="Also share calibration frames (bias, dark, flat)" IsChecked="{Binding ShareCalibrationFrames}" IsEnabled="{Binding ShareFrames}" />
+                    <CheckBox Margin="0,6,0,0" Content="Also share snapshots from the imaging tab" IsChecked="{Binding ShareSnapshots}" IsEnabled="{Binding ShareFrames}" />
+                </StackPanel>
+
+                <TextBlock Grid.Row="12" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Spool folder" />
+                <TextBox Grid.Row="12" Grid.Column="1" Margin="0,4" Text="{Binding SpoolDirectory, UpdateSourceTrigger=LostFocus}" IsEnabled="{Binding ShareFrames}" ToolTip="Where plain FITS copies wait for their upload. Empty: %LOCALAPPDATA%\NINA\ObsServices\spool. Your own image files are never touched." />
+
+                <TextBlock Grid.Row="13" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Spool cap (GB)" />
+                <StackPanel Grid.Row="13" Grid.Column="1" Margin="0,4" Orientation="Horizontal">
+                    <TextBox Width="80" Text="{Binding SpoolCapGb, UpdateSourceTrigger=LostFocus}" IsEnabled="{Binding ShareFrames}" ToolTip="Copies the service already received are dropped oldest first when the spool grows past this. Frames not yet received are never dropped. 0 = no cap." />
+                    <CheckBox Margin="16,0,0,0" VerticalAlignment="Center" Content="Delete copies once the service has them" IsChecked="{Binding DeleteOnRelease}" IsEnabled="{Binding ShareFrames}" />
+                </StackPanel>
+
+                <TextBlock Grid.Row="14" Grid.Column="1" Margin="0,0,0,4" Opacity="0.8" Text="{Binding SpoolStatus}" TextWrapping="Wrap" />
 
                 <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="State interval (s)" />
                 <TextBox Grid.Row="4" Grid.Column="1" Margin="0,4" Width="80" HorizontalAlignment="Left" Text="{Binding StateIntervalSeconds, UpdateSourceTrigger=LostFocus}" />

@@ -12,9 +12,11 @@ and carries out the observation tasks the service assigns through N.I.N.A.'s own
 src/ObsServices.Core          net10.0, no N.I.N.A. or WPF: the agent protocol (Protocol/), channel names and
                               derived entity ids (Channels.cs), sidereal-time helpers (Astro.cs), the agent
                               runtime (Agent/SiteAgent.cs: socket, reconnect, backlog replay, state cadence,
-                              task dispatch, command acks), the device interfaces a host implements (Devices/)
-                              and the generic agent that drives them (Agent/ObservatoryAgent.cs: manifest
-                              binding, telemetry mapping, task execution, commands). Builds and tests anywhere.
+                              task dispatch, command acks, the frame spool and its uploads), the device interfaces
+                              a host implements (Devices/), the generic agent that drives them
+                              (Agent/ObservatoryAgent.cs: manifest binding, telemetry mapping, task execution,
+                              commands, frame announcements) and Imaging/ (FITS decoding, the pixel hash, statistics,
+                              previews, the on-disk spool, the resumable uploader). Builds and tests anywhere.
 src/ObsServicesPlugin         net10.0-windows: the N.I.N.A. plugin. Plugin.cs is the manifest and agent host (settings,
                               connect/disconnect, options page in Options.xaml); Nina/ implements the core's device
                               interfaces over N.I.N.A.'s mediators (mount, camera + image save pipeline, filter wheel,
@@ -53,6 +55,24 @@ publishes N.I.N.A.'s state to it: software, version, profile, idle/running, the 
 item, installed plugin assemblies, and the telemetry-only switch, which the service can flip through a `set`.
 `set` also slews the mount (`ra_deg`/`dec_deg`), parks or stops it (`mode`), changes filter and focus, and
 opens or closes the roof; the agent declares exactly those as writable. See `docs/PLAN.md`.
+
+## Frames (protocol v6)
+
+With *Share the frames N.I.N.A. saves with the service* ticked, every frame N.I.N.A. saves is **announced** to the
+service: its pixel hash (SHA-256 of the pixels as 32-bit floats, the same name the service and Fits_Utils use),
+dimensions, kind, exposure, filter, gain, offset, binning, sensor temperature, the FITS header, N.I.N.A.'s
+statistics and star count, and a small PNG preview. Never the pixels: the service **grants** uploads when it wants
+a frame, and the plugin moves it over HTTP in resumable 8 MiB chunks, two at a time, retrying through network
+trouble and resuming at the committed offset after a restart. Once the service holds the frame it **releases** it
+and the plugin drops its copy. Lights are shared by default; calibration frames and snapshots have their own
+switches. The plugin writes its own plain FITS copy into a **spool** folder (default
+`%LOCALAPPDATA%\NINA\ObsServices\spool`) with N.I.N.A.'s FITS writer, so the user's XISF, TIFF or compressed output
+is untouched and irrelevant; the spool is capped (20 GB by default; only frames the service already received are
+evicted) and survives restarts: the inventory sent after every reconnect lets the service fetch what it missed.
+Add an **`uploader`** component to the site's assembly and the plugin publishes the spool to it: frames and bytes
+waiting, free disk, upload rate, age of the oldest frame. Frames taken while a task runs are tagged with it; frames
+taken by hand are announced too. Sharing is off by default and independent of telemetry-only mode: frames only ever
+leave the machine, so the mode does not gate them.
 
 ## When the service is unreachable
 

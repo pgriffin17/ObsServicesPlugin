@@ -79,5 +79,46 @@ public sealed class Settings {
         set => options.SetValueDouble(nameof(RoofOpenJointValue), value);
     }
 
+    // ---- frames ------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Announce the frames N.I.N.A. saves and upload them when the service asks. Off by default: a granted
+    /// upload moves the whole frame off this machine, which is the user's call. Takes effect at the next connect.
+    /// </summary>
+    public bool ShareFrames {
+        get => options.GetValueBoolean(nameof(ShareFrames), false);
+        set => options.SetValueBoolean(nameof(ShareFrames), value);
+    }
+
+    /// <summary>Also share bias, dark and flat frames (lights are always shared when sharing is on).</summary>
+    public bool ShareCalibrationFrames {
+        get => options.GetValueBoolean(nameof(ShareCalibrationFrames), false);
+        set => options.SetValueBoolean(nameof(ShareCalibrationFrames), value);
+    }
+
+    /// <summary>Also share snapshots from the imaging tab (framing and focus test shots).</summary>
+    public bool ShareSnapshots {
+        get => options.GetValueBoolean(nameof(ShareSnapshots), false);
+        set => options.SetValueBoolean(nameof(ShareSnapshots), value);
+    }
+
+    /// <summary>Where the plain FITS copies wait for their upload. Empty = <c>%LOCALAPPDATA%\NINA\ObsServices\spool</c>.</summary>
+    public string SpoolDirectory {
+        get => options.GetValueString(nameof(SpoolDirectory), string.Empty);
+        set => options.SetValueString(nameof(SpoolDirectory), (value ?? string.Empty).Trim());
+    }
+
+    /// <summary>Cap on the spool's copies, gigabytes; frames the service already received go first when over it. 0 = no cap.</summary>
+    public double SpoolCapGb {
+        get => options.GetValueDouble(nameof(SpoolCapGb), 20);
+        set => options.SetValueDouble(nameof(SpoolCapGb), Math.Max(0, value));
+    }
+
+    /// <summary>Delete the spool's copy once the service holds the frame. The user's own file is never touched.</summary>
+    public bool DeleteOnRelease {
+        get => options.GetValueBoolean(nameof(DeleteOnRelease), true);
+        set => options.SetValueBoolean(nameof(DeleteOnRelease), value);
+    }
+
     public bool IsComplete => !string.IsNullOrWhiteSpace(ServiceUrl) && !string.IsNullOrWhiteSpace(SiteId) && !string.IsNullOrWhiteSpace(AgentToken);
 }
