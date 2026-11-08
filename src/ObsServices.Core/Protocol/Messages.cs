@@ -285,6 +285,8 @@ public sealed class UpJsonConverter : JsonConverter<Up> {
             "event" => node.Deserialize<Event>(inner),
             "ack" => node.Deserialize<Ack>(inner),
             "entities" => node.Deserialize<EntitiesMsg>(inner),
+            "image_captured" => node.Deserialize<ImageCaptured>(inner),
+            "image_inventory" => node.Deserialize<ImageInventory>(inner),
             _ => throw new JsonException($"unknown up message type `{type}`"),
         };
     }
@@ -318,6 +320,8 @@ public sealed class DownJsonConverter : JsonConverter<Down> {
             "task_cancel" => node.Deserialize<TaskCancel>(inner),
             "plan" => node.Deserialize<Plan>(inner),
             "command" => node.Deserialize<Command>(inner),
+            "image_grant" => node.Deserialize<ImageGrant>(inner),
+            "image_release" => node.Deserialize<ImageRelease>(inner),
             _ => throw new JsonException($"unknown down message type `{type}`"),
         };
     }
@@ -330,6 +334,8 @@ public sealed class DownJsonConverter : JsonConverter<Down> {
             TaskCancel c => ("task_cancel", c),
             Plan p => ("plan", p),
             Command c => ("command", c),
+            ImageGrant g => ("image_grant", g),
+            ImageRelease r => ("image_release", r),
             _ => throw new JsonException($"unknown down message {value.GetType().Name}"),
         };
         var node = JsonSerializer.SerializeToNode(payload, payload.GetType(), ProtocolJson.Options) as JsonObject ?? new JsonObject();
@@ -347,7 +353,7 @@ public sealed class DownJsonConverter : JsonConverter<Down> {
 /// <summary>Serializer settings shared by every protocol type.</summary>
 public static class ProtocolJson {
     /// <summary>Wire protocol version this library speaks.</summary>
-    public const int Version = 4;
+    public const int Version = 6;
 
     public static readonly JsonSerializerOptions Options = new() {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,

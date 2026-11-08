@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using ObsServices.Core.Imaging;
 using ObsServices.Core.Protocol;
 
 namespace ObsServices.Core.Agent;
@@ -23,7 +24,11 @@ public abstract class SiteAgent {
     private readonly Queue<Up> backlog = new();
     private readonly Dictionary<string, (TaskHandle Handle, Task Run)> tasks = new();
     private readonly object gate = new();
+    private readonly HashSet<string> uploading = new();
+    private readonly Queue<(double T, long Bytes)> sent = new();
+    private readonly List<Task> grants = new();
     private ClientWebSocket? socket;
+    private HttpClient? uploadHttp;
 
     protected SiteAgent(string baseUrl, string siteId, string token) {
         BaseUrl = baseUrl.TrimEnd('/');
@@ -68,6 +73,19 @@ public abstract class SiteAgent {
 
     /// <summary>Telemetry messages kept for replay while the service is unreachable.</summary>
     public int BacklogLimit { get; set; } = 20_000;
+
+    /// <summary>
+    /// The frames this agent holds for the service. Attach one before <see cref="RunAsync"/> to announce
+    /// frames (<see cref="AnnounceImageAsync(byte[], FrameInfo)"/>), honour upload grants and report the
+    /// inventory after every reconnect; <c>hello</c> then declares <c>images:spool</c>. Null: no images.
+    /// </summary>
+    public FrameSpool? Spool { get; set; }
+
+    /// <summary>How many times an upload is retried through network trouble (5xx, resets, timeouts).</summary>
+    public int UploadAttempts { get; set; } = 5;
+
+    /// <summary>Per-request timeout of the upload client. A chunk is 8 MiB at most, so two minutes covers a slow link.</summary>
+    public TimeSpan UploadTimeout { get; set; } = TimeSpan.FromMinutes(2);
 
     public string BaseUrl { get; }
 
@@ -162,6 +180,13 @@ public abstract class SiteAgent {
             return false;
         }
 
+        // the service translates moving targets for agents that do not list the kind; one that arrives
+        // untranslated is one this agent cannot follow
+        if (task.Target.Body is { } body && !Capabilities.Contains(Body.Capability(body.Kind))) {
+            reason = $"this agent does not follow {body.Kind} targets";
+            return false;
+        }
+
         reason = null;
         return true;
     }
@@ -182,6 +207,19 @@ public abstract class SiteAgent {
 
     /// <summary>The service's preferred order for the open tasks on an instrument.</summary>
     protected virtual Task OnPlanAsync(string? instrument, IReadOnlyList<string> order, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    /// <summary>
+    /// The service wants these frames (hook). The default uploads every granted hash the spool holds,
+    /// <c>max_concurrency</c> at a time, in the background, retrying through network trouble; override to
+    /// schedule uploads yourself (<see cref="FrameUploader.UploadAsync"/> does one).
+    /// </summary>
+    protected virtual Task OnImageGrantAsync(ImageGrant grant) => RunGrantAsync(grant);
+
+    /// <summary>
+    /// The service holds these frames durably (hook, default no-op). Called with the entries still in the
+    /// spool; afterwards the spool forgets them and deletes the files it owns when allowed.
+    /// </summary>
+    protected virtual Task OnImageReleasedAsync(IReadOnlyList<SpoolEntry> entries) => Task.CompletedTask;
 
     /// <summary>Diagnostics. Hosts forward these to their own log.</summary>
     protected virtual void Log(Level level, string message, Exception? exception = null) {
@@ -257,6 +295,9 @@ public abstract class SiteAgent {
             await publisher.ConfigureAwait(false);
         } catch (OperationCanceledException) {
         }
+
+        uploadHttp?.Dispose();
+        uploadHttp = null;
     }
 
     /// <summary>Ask <see cref="RunAsync"/> to return. Running tasks see their <see cref="TaskHandle.Cancelled"/> fire.</summary>
@@ -290,7 +331,13 @@ public abstract class SiteAgent {
 
     private async Task SessionAsync(ClientWebSocket ws, CancellationToken ct) {
         socket = ws;
-        var hello = new Hello { Agent = Name, Version = Version, Protocol = ProtocolJson.Version, Capabilities = Capabilities.ToList(), Entities = Entities().ToList() };
+        var capabilities = Capabilities.ToList();
+
+        if (Spool != null && !capabilities.Contains(Images.Capability)) {
+            capabilities.Add(Images.Capability);
+        }
+
+        var hello = new Hello { Agent = Name, Version = Version, Protocol = ProtocolJson.Version, Capabilities = capabilities, Entities = Entities().ToList() };
         await SendRawAsync(ws, hello, ct).ConfigureAwait(false);
 
         // replay what the outage swallowed; the service keys samples on timestamp
@@ -358,6 +405,7 @@ public abstract class SiteAgent {
         while (!ct.IsCancellationRequested) {
             try {
                 var state = await StateAsync(ct).ConfigureAwait(false);
+                state = AddUploaderState(state);
 
                 if (state != null && state.State.Count > 0) {
                     await PublishAsync(state).ConfigureAwait(false);
@@ -427,7 +475,8 @@ public abstract class SiteAgent {
     }
 
     private void Backlog(Up message) {
-        if (message is not (StateMsg or Event)) {
+        // the same kinds the service's Python agent replays after an outage
+        if (message is not (StateMsg or Event or ImageCaptured)) {
             return;
         }
 
@@ -461,6 +510,12 @@ public abstract class SiteAgent {
                 // bind before anyone waiting on Ready (the publish loop, tasks, hosts) proceeds
                 await OnManifestAsync(Manifest, ct).ConfigureAwait(false);
                 Ready.Set();
+
+                if (Spool != null) {
+                    // what we still hold; the service grants or releases each frame accordingly
+                    await SendInventoryAsync().ConfigureAwait(false);
+                }
+
                 break;
 
             case ManifestUpdate m:
@@ -500,6 +555,14 @@ public abstract class SiteAgent {
 
             case Command command:
                 _ = Task.Run(() => HandleCommandAsync(command, ct), CancellationToken.None);
+                break;
+
+            case ImageGrant grant when Spool != null:
+                StartGrant(grant);
+                break;
+
+            case ImageRelease release when Spool != null:
+                await HandleReleaseAsync(release).ConfigureAwait(false);
                 break;
         }
     }
@@ -617,9 +680,11 @@ public abstract class SiteAgent {
 
     private async Task CancelAllAsync() {
         List<(TaskHandle Handle, Task Run)> running;
+        List<Task> uploads;
 
         lock (gate) {
             running = tasks.Values.ToList();
+            uploads = grants.ToList();
         }
 
         foreach (var (handle, _) in running) {
@@ -627,9 +692,255 @@ public abstract class SiteAgent {
         }
 
         try {
-            await Task.WhenAll(running.Select(r => r.Run)).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            await Task.WhenAll(running.Select(r => r.Run).Concat(uploads)).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
         } catch (Exception) {
-            // tasks that do not honour cancellation are abandoned
+            // tasks that do not honour cancellation are abandoned; uploads resume under the next grant
+        }
+    }
+
+    // ---- images: the spool --------------------------------------------------------------------------
+
+    /// <summary>
+    /// A frame exists: describe it (pixel hash, header, statistics, a preview), keep a copy in the
+    /// <see cref="Spool"/> and tell the service (<c>image_captured</c>). <paramref name="info"/> must name the
+    /// camera entity. Queued and replayed like telemetry when the socket is down. The upload happens later,
+    /// only when the service grants it. Returns the pixel hash.
+    /// </summary>
+    public Task<string> AnnounceImageAsync(byte[] fits, FrameInfo info) => AnnounceImageAsync(FrameDescriber.Describe(fits, info), fits);
+
+    /// <summary>The same for an unsigned 16-bit frame still in memory, with <paramref name="fits"/> its encoding (no second decode).</summary>
+    public Task<string> AnnounceImageAsync(ReadOnlyMemory<ushort> pixels, int width, int height, byte[] fits, FrameInfo info) =>
+        AnnounceImageAsync(FrameDescriber.Describe(pixels, width, height, fits, info), fits);
+
+    /// <summary>Announce an already described frame, spooling a copy of <paramref name="fits"/>.</summary>
+    public async Task<string> AnnounceImageAsync(ImageCaptured described, byte[] fits) {
+        var spool = Spool ?? throw new InvalidOperationException("no frame spool is attached to this agent");
+        RequireAnnouncable(described);
+        await Task.Run(() => spool.Add(described, fits)).ConfigureAwait(false);
+        await SendAsync(described).ConfigureAwait(false);
+        return described.Hash;
+    }
+
+    /// <summary>Announce a FITS file the host keeps itself; the spool references it and never deletes it.</summary>
+    public async Task<string> AnnounceImageFileAsync(string path, FrameInfo info) {
+        var spool = Spool ?? throw new InvalidOperationException("no frame spool is attached to this agent");
+        var fits = await File.ReadAllBytesAsync(path).ConfigureAwait(false);
+        info.FileName ??= Path.GetFileName(path);
+        var described = FrameDescriber.Describe(fits, info);
+        RequireAnnouncable(described);
+        spool.AddReference(described, path);
+        await SendAsync(described).ConfigureAwait(false);
+        return described.Hash;
+    }
+
+    private static void RequireAnnouncable(ImageCaptured described) {
+        if (string.IsNullOrEmpty(described.Camera)) {
+            throw new ArgumentException("a frame needs the camera entity it came from");
+        }
+
+        if (!Images.IsHash(described.Hash)) {
+            throw new ArgumentException("the frame has no pixel hash");
+        }
+    }
+
+    /// <summary>Tell the service what the spool holds (<c>image_inventory</c>). Sent after every <c>welcome</c>.</summary>
+    public Task SendInventoryAsync() {
+        var spool = Spool;
+
+        if (spool == null) {
+            return Task.CompletedTask;
+        }
+
+        var inventory = new ImageInventory {
+            Frames = spool.Entries.Select(e => new InventoryFrame { Hash = e.Hash, Bytes = e.Bytes }).ToList(),
+            FreeBytes = spool.FreeBytes(),
+        };
+        return SendAsync(inventory);
+    }
+
+    /// <summary>Bytes per second uploaded over the last <paramref name="windowSeconds"/>.</summary>
+    public double UploadRateBps(double windowSeconds = 60) {
+        var cut = Now() - windowSeconds;
+
+        lock (gate) {
+            while (sent.Count > 0 && sent.Peek().T < cut) {
+                sent.Dequeue();
+            }
+
+            return sent.Sum(s => s.Bytes) / windowSeconds;
+        }
+    }
+
+    /// <summary>Hashes whose upload is in progress.</summary>
+    public IReadOnlyList<string> Uploading {
+        get { lock (gate) return uploading.ToList(); }
+    }
+
+    /// <summary>
+    /// The <c>uploader</c> entities' telemetry (nothing when the site has no such component): queued frames
+    /// and bytes, free space, upload rate over the last minute, age of the oldest frame waiting. Merged into
+    /// every state message.
+    /// </summary>
+    private StateMsg? AddUploaderState(StateMsg? state) {
+        var spool = Spool;
+
+        if (spool == null) {
+            return state;
+        }
+
+        var uploaders = Manifest.OfKind(EntityKind.Component).Where(e => e.Component == Channels.UploaderComponent).ToList();
+
+        if (uploaders.Count == 0) {
+            return state;
+        }
+
+        var pending = spool.Pending;
+        var now = Now();
+        state ??= new StateMsg(now);
+
+        foreach (var u in uploaders) {
+            state.Set(u.Id, Channels.UploaderQueuedFrames, pending.Count);
+            state.Set(u.Id, Channels.UploaderQueuedBytes, pending.Sum(e => e.Bytes));
+            state.Set(u.Id, Channels.UploaderRateBps, Math.Round(UploadRateBps(), 1));
+            state.Set(u.Id, Channels.UploaderOldestUnsentS, pending.Count == 0 ? 0.0 : Math.Round(Math.Max(0.0, now - pending.Min(e => e.CapturedAt)), 1));
+
+            if (spool.FreeBytes() is { } free) {
+                state.Set(u.Id, Channels.UploaderFreeBytes, free);
+            }
+        }
+
+        return state;
+    }
+
+    private void StartGrant(ImageGrant grant) {
+        var run = Task.Run(async () => {
+            try {
+                await OnImageGrantAsync(grant).ConfigureAwait(false);
+            } catch (OperationCanceledException) {
+            } catch (Exception e) {
+                Log(Level.Warn, $"image grant: {e.Message}", e);
+            }
+        }, CancellationToken.None);
+
+        lock (gate) {
+            grants.Add(run);
+        }
+
+        run.ContinueWith(t => { lock (gate) grants.Remove(t); }, TaskScheduler.Default);
+    }
+
+    private async Task RunGrantAsync(ImageGrant grant) {
+        var spool = Spool;
+
+        if (spool == null) {
+            return;
+        }
+
+        List<string> wanted;
+
+        lock (gate) {
+            wanted = grant.Hashes.Where(h => spool.Get(h) is { Uploaded: false } && uploading.Add(h)).ToList();
+        }
+
+        if (wanted.Count == 0) {
+            return;
+        }
+
+        try {
+            var http = uploadHttp ??= new HttpClient { Timeout = UploadTimeout };
+            using var sem = new SemaphoreSlim(Math.Max(1, grant.MaxConcurrency));
+            await Task.WhenAll(wanted.Select(h => UploadOneAsync(http, sem, spool, grant, h))).ConfigureAwait(false);
+        } finally {
+            lock (gate) {
+                uploading.ExceptWith(wanted);
+            }
+        }
+    }
+
+    private async Task UploadOneAsync(HttpClient http, SemaphoreSlim sem, FrameSpool spool, ImageGrant grant, string hash) {
+        var ct = stopping.Token;
+        var brief = hash[..12] + "…";
+        await sem.WaitAsync(ct).ConfigureAwait(false);
+
+        try {
+            for (var attempt = 1; ; attempt++) {
+                var entry = spool.Get(hash);
+
+                if (entry == null || entry.Uploaded) {
+                    return;
+                }
+
+                if (grant.ExpiresAt > 0 && Now() > grant.ExpiresAt) {
+                    await EventAsync($"image upload: the grant for {brief} expired before it was sent", Level.Warn).ConfigureAwait(false);
+                    return;
+                }
+
+                UploadResult result;
+
+                try {
+                    using var data = spool.Open(entry);
+                    result = await FrameUploader.UploadAsync(http, grant, hash, data, NoteSent, ct).ConfigureAwait(false);
+                } catch (IOException e) {
+                    await EventAsync($"image upload: cannot read {brief}: {e.Message}", Level.Warn).ConfigureAwait(false);
+                    return;
+                } catch (Exception e) when (e is HttpRequestException || (e is OperationCanceledException && !ct.IsCancellationRequested)) {
+                    if (attempt >= UploadAttempts) {
+                        await EventAsync($"image upload failed: {brief} after {attempt} attempts: {e.Message}", Level.Warn).ConfigureAwait(false);
+                        return;
+                    }
+
+                    Log(Level.Warn, $"image upload {brief}: {e.Message}; retrying", e);
+                    await Task.Delay(TimeSpan.FromSeconds(Math.Min(30, Math.Pow(2, attempt - 1))), ct).ConfigureAwait(false);
+                    continue;
+                }
+
+                switch (result.Status) {
+                    case UploadStatus.Received:
+                        spool.MarkUploaded(hash);
+                        Log(Level.Info, $"image {brief} received by the service ({entry.Bytes} bytes)");
+                        break;
+                    case UploadStatus.Missing:
+                        await EventAsync($"image upload skipped: the service has no grant for {brief}", Level.Warn).ConfigureAwait(false);
+                        break;
+                    default:
+                        await EventAsync($"image upload refused: {brief} {result.Error} (HTTP {result.Http})", Level.Warn).ConfigureAwait(false);
+                        break;
+                }
+
+                return;
+            }
+        } finally {
+            sem.Release();
+        }
+    }
+
+    private void NoteSent(long bytes) {
+        lock (gate) {
+            sent.Enqueue((Now(), bytes));
+        }
+    }
+
+    private async Task HandleReleaseAsync(ImageRelease release) {
+        var spool = Spool;
+
+        if (spool == null) {
+            return;
+        }
+
+        var entries = release.Hashes.Select(spool.Get).Where(e => e != null).Select(e => e!).ToList();
+
+        if (entries.Count == 0) {
+            return;
+        }
+
+        try {
+            await OnImageReleasedAsync(entries).ConfigureAwait(false);
+        } catch (Exception e) {
+            Log(Level.Warn, $"image release hook: {e.Message}", e);
+        }
+
+        foreach (var e in entries) {
+            spool.Release(e.Hash);
         }
     }
 }

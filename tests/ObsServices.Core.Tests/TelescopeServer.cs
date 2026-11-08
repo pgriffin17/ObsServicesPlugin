@@ -81,6 +81,9 @@ public sealed class TelescopeServer : IDisposable {
         psi.Environment["TELESCOPE_SKY_UPSTREAM"] = "0";
         psi.Environment["TELESCOPE_SKY_MIRROR"] = "off";
         psi.Environment["TELESCOPE_ADMINS"] = "admin@test.local";
+        // an image store of its own, with no reserve, so frames are granted whatever the disk looks like
+        psi.Environment["TELESCOPE_IMAGE_STORE"] = "fs:" + Path.Combine(tmp, "images");
+        psi.Environment["TELESCOPE_IMAGE_RESERVE_MB"] = "0";
         psi.Environment["RUST_LOG"] = "warn";
         psi.Environment.Remove("TELESCOPE_BIND");
 

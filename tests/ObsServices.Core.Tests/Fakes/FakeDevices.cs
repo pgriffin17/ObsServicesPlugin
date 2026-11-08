@@ -1,5 +1,7 @@
 using ObsServices.Core;
 using ObsServices.Core.Devices;
+using ObsServices.Core.Imaging;
+using ObsServices.Core.Protocol;
 
 namespace ObsServices.Core.Tests.Fakes;
 
@@ -159,6 +161,43 @@ public sealed class FakeCamera : ICameraDevice {
 
     public List<ExposureRequest> Exposures { get; } = new();
 
+    /// <summary>Sensor size of the synthetic frames; small so a test moves little.</summary>
+    public int Width { get; set; } = 64;
+
+    public int Height { get; set; } = 48;
+
+    /// <summary>Every frame taken, as the FITS bytes the sink was handed.</summary>
+    public List<(string Hash, byte[] Fits, FrameInfo Info)> Frames { get; } = new();
+
+    /// <summary>Where frames go once read out (the agent's announce); null discards them.</summary>
+    public Func<ReadOnlyMemory<ushort>, int, int, byte[], FrameInfo, Task>? FrameTaken { get; set; }
+
+    /// <summary>A deterministic sky: a pedestal with noise and a few Gaussian stars, seeded by the frame count.</summary>
+    public static ushort[] Synthesize(int width, int height, int seed) {
+        var rng = new Random(seed);
+        var px = new double[width * height];
+
+        for (var i = 0; i < px.Length; i++) {
+            px[i] = 500 + 8 * Gauss(rng);
+        }
+
+        for (var s = 0; s < 12; s++) {
+            double cx = rng.NextDouble() * width, cy = rng.NextDouble() * height, amp = 200 + rng.NextDouble() * 20000, sig = 1.2 + rng.NextDouble() * 1.3;
+            var r = (int)Math.Ceiling(4 * sig);
+
+            for (var y = Math.Max(0, (int)cy - r); y < Math.Min(height, (int)cy + r + 1); y++) {
+                for (var x = Math.Max(0, (int)cx - r); x < Math.Min(width, (int)cx + r + 1); x++) {
+                    var d2 = Math.Pow(x + 0.5 - cx, 2) + Math.Pow(y + 0.5 - cy, 2);
+                    px[y * width + x] += amp * Math.Exp(-d2 / (2 * sig * sig));
+                }
+            }
+        }
+
+        return px.Select(v => (ushort)Math.Clamp(Math.Round(v), 0, 65535)).ToArray();
+    }
+
+    private static double Gauss(Random rng) => Math.Sqrt(-2.0 * Math.Log(Math.Max(rng.NextDouble(), 1e-12))) * Math.Cos(2 * Math.PI * rng.NextDouble());
+
     public CameraReading Read() {
         lock (gate) {
             if (!Connected) {
@@ -177,11 +216,47 @@ public sealed class FakeCamera : ICameraDevice {
             exposureEnd = DateTime.UtcNow + TimeSpan.FromSeconds(request.Seconds * clock.TimeScale);
         }
 
+        var started = Timestamp.Now();
+
         try {
             await clock.SleepAsync(request.Seconds, ct);
             lock (gate) activity = CameraActivity.ReadingOut;
             await clock.SleepAsync(ReadoutSeconds, ct);
-            lock (gate) Exposures.Add(request);
+            int seed;
+
+            lock (gate) {
+                Exposures.Add(request);
+                seed = Exposures.Count;
+            }
+
+            if (FrameTaken is { } sink) {
+                var pixels = Synthesize(Width, Height, seed);
+                var fits = Fits.Write(pixels, Width, Height, new[] {
+                    new FitsCard("IMAGETYP", "LIGHT", "frame type"),
+                    new FitsCard("EXPTIME", request.Seconds, "seconds"),
+                    new FitsCard("FILTER", request.Filter),
+                    new FitsCard("OBJECT", request.TargetName),
+                    new FitsCard("DATE-OBS", DateTimeOffset.FromUnixTimeMilliseconds((long)(started * 1000)).UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff")),
+                    new FitsCard("GAIN", 100),
+                    new FitsCard("OFFSET", 50),
+                    new FitsCard("XBINNING", 1),
+                    new FitsCard("CCD-TEMP", -10.0),
+                });
+                var info = new FrameInfo {
+                    Kind = ImageKind.Light,
+                    CapturedAt = started,
+                    ExposureS = request.Seconds,
+                    Filter = request.Filter,
+                    TaskId = request.TaskId,
+                    Gain = 100,
+                    Offset = 50,
+                    Binning = 1,
+                    TemperatureC = -10.0,
+                    FileName = $"{request.TargetName}_{request.Filter}_{request.FrameIndex + 1:000}.fits",
+                };
+                lock (gate) Frames.Add((Fits.HashOfUInt16(pixels), fits, info));
+                await sink(pixels, Width, Height, fits, info);
+            }
         } finally {
             lock (gate) activity = CameraActivity.Idle;
         }
