@@ -10,7 +10,8 @@ and carries out the observation tasks the service assigns through N.I.N.A.'s own
 
 ```
 src/ObsServices.Core          net10.0, no N.I.N.A. or WPF: the agent protocol (Protocol/), channel names and
-                              derived entity ids (Channels.cs), sidereal-time helpers (Astro.cs), the agent
+                              derived entity ids (Channels.cs), sidereal-time helpers (Astro.cs), Update/ (git sync, build and
+                              staging for the in-app updater), the agent
                               runtime (Agent/SiteAgent.cs: socket, reconnect, backlog replay, state cadence,
                               task dispatch, command acks, the frame spool and its uploads), the device interfaces
                               a host implements (Devices/), the generic agent that drives them
@@ -73,6 +74,24 @@ Add an **`uploader`** component to the site's assembly and the plugin publishes 
 waiting, free disk, upload rate, age of the oldest frame. Frames taken while a task runs are tagged with it; frames
 taken by hand are announced too. Sharing is off by default and independent of telemetry-only mode: frames only ever
 leave the machine, so the mode does not gate them.
+
+## Updating from a branch
+
+The options page has an **Update from branch** panel. *Check* fetches the chosen branch (default `dev`; `nina-3.2` on
+a 3.2 install) and says how far behind the running build is. *Update* syncs the branch, runs
+`dotnet build -c Release -t:StageForNina` and copies the package into N.I.N.A.'s own plugin staging area
+(`%LOCALAPPDATA%\NINA\PluginStaging\<version>\<plugin folder>`), which N.I.N.A. installs from at its next start,
+before any plugin is loaded. Nothing N.I.N.A. has loaded is touched, so the update runs while N.I.N.A. is open and
+imaging. *Restart N.I.N.A.* asks first and is refused while a sequence runs. The machine needs git and the .NET SDK;
+the first build clones and restores, later ones take well under a minute. By default the plugin builds from its own
+clone under `%LOCALAPPDATA%\NINA\ObsServices\src`, reset to the branch on every update; point *Source folder* at
+your own checkout and it is only ever fast-forwarded, and left alone when it has uncommitted changes.
+
+Every build is stamped with its commit (`GitCommit`, `GitBranch`, `GitDate`, `GitDirty` assembly metadata and an
+informational version such as `1.0.0.0+dev.0102f69`); the page shows it and the agent reports it as its version.
+The package carries a manifest (`.obsservices-files`), and at start-up the plugin moves assemblies in its folder
+that the manifest does not list into N.I.N.A.'s deletion area, so a dependency a newer build dropped does not linger.
+`dotnet build -t:DeployPlugin` still works for a closed N.I.N.A.
 
 ## When the service is unreachable
 

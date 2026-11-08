@@ -123,3 +123,39 @@ without `target:<kind>` declines what the service did not translate).
   preview as grey mosaics.
 * The spool cap only evicts frames the service received; if the service withholds grants for long the spool
   grows to whatever the disk allows, and the `uploader` telemetry is the warning.
+
+# Updating from a branch inside N.I.N.A.
+
+Done 2026-11-07. The locked-DLL problem (`DeployPlugin` cannot replace a loaded assembly) is sidestepped the way
+N.I.N.A.'s own plugin manager does it: `PluginLoader.DeployFromStaging` moves whatever is in
+`%LOCALAPPDATA%\NINA\PluginStaging\<version>\` into `Plugins\<version>\` at start-up, before loading. The plugin
+builds into that folder and never touches its own files.
+
+- `build/Plugin.targets`: `ObsGitStamp` (commit, branch, date, dirty as `AssemblyMetadata`, informational version
+  `1.0.0.0+<branch>.<short>[.dirty]`; `IncludeSourceRevisionInInformationalVersion` off) and `StageForNina`
+  (plain MSBuild `Copy` of `@(PluginPackageFile)` into `-p:NinaStageDirectory`, plus the `.obsservices-files` manifest;
+  no PowerShell).
+- `src/ObsServices.Core/Update/`: `CommandRunner` (git/dotnet out of process, streamed log, kill on cancel,
+  `GIT_TERMINAL_PROMPT=0`), `GitRepository` (clone/fetch/sync; managed = `checkout -B` + `reset --hard`, unmanaged =
+  refuse dirty, switch only when clean, `merge --ff-only`), `PluginUpdater` (open/clone, check = behind count, update =
+  sync + build + verify manifest; clears a previous stage only when the manifest proves it is ours), `InstalledBuild`
+  (reads the stamp), `StaleFiles` (manifest vs. assemblies in the plugin folder).
+- `src/ObsServicesPlugin/Nina/NinaUpdater.cs`: paths (stage = `Constants.StagingFolder` + the folder the plugin was
+  loaded from, else the sanitized title as Deploy-Plugin.ps1 makes it; managed clone =
+  `%LOCALAPPDATA%\NINA\ObsServices\src`), Check/Update/Cancel/Restart commands, status and a 40-line log, the restart
+  (profile release, start `Environment.ProcessPath`, shutdown; refused while a sequence runs; asks first), and the
+  stale sweep into `Constants.DeletionFolder` at `Initialize`.
+- Settings: `UpdateRepositoryUrl`, `UpdateBranch` (dev), `UpdateSourceDirectory` (empty = managed clone),
+  `CheckUpdatesOnConnect` (fetch only). Options page: the "Update from branch" section.
+- Options page rule: N.I.N.A.'s CheckBox template is an ON/OFF switch with no content presenter, so a CheckBox's
+  `Content` never shows; every switch has a label in the left column and a hint TextBlock beside it.
+- Tests: `UpdateTests` (core, Linux: local bare remote, managed clone follows and resets, user checkout refused when
+  dirty or diverged and fast-forwarded otherwise, branch switch, real `dotnet build` of a stand-in project with a
+  `StageForNina` target, stale files, stage ownership), `NinaUpdaterTests` (folder-name rules).
+
+First things to try on Windows: Check (expect "This is the build N.I.N.A. is running" once a stamped build is
+installed), Update on a branch with a new commit, confirm `%LOCALAPPDATA%\NINA\PluginStaging\3.0.0\Obs Services
+Test Plugin\` fills, restart, confirm the Running line shows the new commit and the staging folder is gone.
+
+Not done: rolling back to a previous build (pick an older commit by hand for now), a remote trigger through the
+`sequencer` entity, CI-built packages instead of a local SDK.

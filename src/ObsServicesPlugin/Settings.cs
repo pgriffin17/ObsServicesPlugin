@@ -120,5 +120,36 @@ public sealed class Settings {
         set => options.SetValueBoolean(nameof(DeleteOnRelease), value);
     }
 
+    // ---- updates -----------------------------------------------------------------------------------
+
+    public const string DefaultRepositoryUrl = "https://github.com/pgriffin17/ObsServicesPlugin.git";
+
+    /// <summary>The git repository the in-app updater builds from.</summary>
+    public string UpdateRepositoryUrl {
+        get => options.GetValueString(nameof(UpdateRepositoryUrl), DefaultRepositoryUrl);
+        set => options.SetValueString(nameof(UpdateRepositoryUrl), string.IsNullOrWhiteSpace(value) ? DefaultRepositoryUrl : value.Trim());
+    }
+
+    /// <summary>The branch to follow; <c>dev</c> by default, <c>nina-3.2</c> on a 3.2 install.</summary>
+    public string UpdateBranch {
+        get => options.GetValueString(nameof(UpdateBranch), "dev");
+        set => options.SetValueString(nameof(UpdateBranch), string.IsNullOrWhiteSpace(value) ? "dev" : value.Trim());
+    }
+
+    /// <summary>
+    /// A checkout of your own to build from instead of the plugin's clone. It is only ever fast-forwarded and is left
+    /// alone when it has uncommitted changes. Empty = the plugin's clone under <c>%LOCALAPPDATA%\NINA\ObsServices\src</c>.
+    /// </summary>
+    public string UpdateSourceDirectory {
+        get => options.GetValueString(nameof(UpdateSourceDirectory), string.Empty);
+        set => options.SetValueString(nameof(UpdateSourceDirectory), (value ?? string.Empty).Trim());
+    }
+
+    /// <summary>Fetch the branch when connecting and show how far behind this build is. Never builds on its own.</summary>
+    public bool CheckUpdatesOnConnect {
+        get => options.GetValueBoolean(nameof(CheckUpdatesOnConnect), false);
+        set => options.SetValueBoolean(nameof(CheckUpdatesOnConnect), value);
+    }
+
     public bool IsComplete => !string.IsNullOrWhiteSpace(ServiceUrl) && !string.IsNullOrWhiteSpace(SiteId) && !string.IsNullOrWhiteSpace(AgentToken);
 }

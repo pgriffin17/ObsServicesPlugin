@@ -15,6 +15,7 @@ using ObsServices.Core.Agent;
 using ObsServices.Core.Devices;
 using ObsServices.Core.Imaging;
 using ObsServices.Core.Protocol;
+using ObsServices.Core.Update;
 using ObsServicesPlugin.Nina;
 
 namespace ObsServicesPlugin;
@@ -41,7 +42,7 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
 
     [ImportingConstructor]
     public Plugin(IProfileService profiles, ITelescopeMediator telescope, ICameraMediator camera, IImagingMediator imaging, IImageSaveMediator imageSave, IFilterWheelMediator filterWheel, IDomeMediator dome, IFocuserMediator focuser, ISequenceMediator sequence)
-        : this(profiles, Compose(profiles, telescope, camera, imaging, imageSave, filterWheel, dome, focuser, sequence), imageSave) {
+        : this(profiles, Compose(profiles, telescope, camera, imaging, imageSave, filterWheel, dome, focuser, sequence), imageSave, sequence) {
     }
 
     private static DeviceSet Compose(IProfileService profiles, ITelescopeMediator telescope, ICameraMediator camera, IImagingMediator imaging, IImageSaveMediator imageSave, IFilterWheelMediator filterWheel, IDomeMediator dome, IFocuserMediator focuser, ISequenceMediator sequence) =>
@@ -55,11 +56,13 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
         };
 
     /// <summary>For tests and other hosts: any device set; frames are shared only when an image save mediator is given.</summary>
-    public Plugin(IProfileService profiles, IDeviceSet devices, IImageSaveMediator? imageSave = null) {
+    public Plugin(IProfileService profiles, IDeviceSet devices, IImageSaveMediator? imageSave = null, ISequenceMediator? sequence = null) {
         this.profiles = profiles;
         this.devices = devices;
         sequencerHost = devices.Sequencer as NinaSequencerHost;
         Settings = new Settings(profiles, Guid.Parse(Identifier));
+        Build = InstalledBuild.Of(typeof(Plugin).Assembly);
+        Updater = new NinaUpdater(() => Settings, profiles, sequence, typeof(Plugin).Assembly, Name);
 
         if (imageSave != null) {
             frameSource = new NinaFrameSource(imageSave, () => agent, () => new FrameSharing(Settings.ShareFrames, Settings.ShareCalibrationFrames, Settings.ShareSnapshots));
@@ -72,6 +75,15 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
     }
 
     public Settings Settings { get; private set; }
+
+    /// <summary>The commit this build came from, when the build stamped it.</summary>
+    public InstalledBuild Build { get; }
+
+    /// <summary>The "Update from branch" panel.</summary>
+    public NinaUpdater Updater { get; }
+
+    /// <summary>What the agent reports as its version: the file version plus the commit when known.</summary>
+    public string AgentVersion => Build.Known ? $"{Build.Version}+{Build.Branch}.{Build.Short}{(Build.Dirty ? ".dirty" : string.Empty)}" : Version?.ToString() ?? "0.0.0.0";
 
     public ICommand ConnectCommand { get; }
 
@@ -255,6 +267,32 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
         }
     }
 
+    // ---- updates -----------------------------------------------------------------------------------
+
+    public string UpdateRepositoryUrl {
+        get => Settings.UpdateRepositoryUrl;
+        set { Settings.UpdateRepositoryUrl = value; Raise(); }
+    }
+
+    public string UpdateBranch {
+        get => Settings.UpdateBranch;
+        set { Settings.UpdateBranch = value; Raise(); }
+    }
+
+    public string UpdateSourceDirectory {
+        get => Settings.UpdateSourceDirectory;
+        set { Settings.UpdateSourceDirectory = value; Raise(); Raise(nameof(UpdateSourceDescription)); }
+    }
+
+    public bool CheckUpdatesOnConnect {
+        get => Settings.CheckUpdatesOnConnect;
+        set { Settings.CheckUpdatesOnConnect = value; Raise(); }
+    }
+
+    public string UpdateSourceDescription => Updater.Managed
+        ? $"Builds from the plugin's own clone at {Updater.SourceDirectory}; it is reset to the branch on every update."
+        : $"Builds from your checkout at {Updater.SourceDirectory}; it is only fast-forwarded and left alone when it has uncommitted changes.";
+
     /// <summary>The spool directory in use: the setting, or N.I.N.A.'s local app data.</summary>
     public static string ResolveSpoolDirectory(string setting) =>
         string.IsNullOrWhiteSpace(setting) ? Path.Combine(CoreUtil.APPLICATIONTEMPPATH, "ObsServices", "spool") : Environment.ExpandEnvironmentVariables(setting);
@@ -264,7 +302,14 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
     // ---- lifecycle ---------------------------------------------------------------------------------
 
     public override Task Initialize() {
-        Logger.Info($"[ObsServices] plugin {Version} loaded");
+        Logger.Info($"[ObsServices] plugin {AgentVersion} loaded from {Updater.PluginDirectory}");
+
+        try {
+            // an update N.I.N.A. installed at this start may have left assemblies an older build shipped
+            Updater.RemoveStaleFiles();
+        } catch (Exception e) {
+            Logger.Warning($"[ObsServices] stale file sweep failed: {e.Message}");
+        }
 
         if (Settings.AutoConnect && Settings.IsComplete) {
             return ConnectAsync();
@@ -301,7 +346,7 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
             if (sequencerHost != null) {
                 sequencerHost.AllowWholeSequences = Settings.AllowWholeSequences;
             }
-            var a = new NinaSiteAgent(Settings.ServiceUrl, Settings.SiteId, Settings.AgentToken, devices, options, Version?.ToString() ?? "0.0.0.0") {
+            var a = new NinaSiteAgent(Settings.ServiceUrl, Settings.SiteId, Settings.AgentToken, devices, options, AgentVersion) {
                 StateInterval = TimeSpan.FromSeconds(Settings.StateIntervalSeconds),
             };
             a.Logged += (level, message) => LastMessage = $"{level}: {message}";
@@ -331,6 +376,11 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
 
         Status = $"Connecting to {Settings.SiteId}";
         RaiseConnectionChanged();
+
+        if (Settings.CheckUpdatesOnConnect && !Updater.Busy) {
+            _ = Updater.CheckAsync();
+        }
+
         return Task.CompletedTask;
     }
 
@@ -403,7 +453,7 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
         Settings = new Settings(profiles, Guid.Parse(Identifier));
         Raise(nameof(Settings));
 
-        foreach (var name in new[] { nameof(ServiceUrl), nameof(SiteId), nameof(AgentToken), nameof(Instrument), nameof(Sequencer), nameof(AllowWholeSequences), nameof(AutoConnect), nameof(TelemetryOnly), nameof(ModeDescription), nameof(StateIntervalSeconds), nameof(RoofOpenJointValue), nameof(ShareFrames), nameof(ShareCalibrationFrames), nameof(ShareSnapshots), nameof(SpoolDirectory), nameof(SpoolCapGb), nameof(DeleteOnRelease), nameof(SpoolStatus) }) {
+        foreach (var name in new[] { nameof(ServiceUrl), nameof(SiteId), nameof(AgentToken), nameof(Instrument), nameof(Sequencer), nameof(AllowWholeSequences), nameof(AutoConnect), nameof(TelemetryOnly), nameof(ModeDescription), nameof(StateIntervalSeconds), nameof(RoofOpenJointValue), nameof(ShareFrames), nameof(ShareCalibrationFrames), nameof(ShareSnapshots), nameof(SpoolDirectory), nameof(SpoolCapGb), nameof(DeleteOnRelease), nameof(SpoolStatus), nameof(UpdateRepositoryUrl), nameof(UpdateBranch), nameof(UpdateSourceDirectory), nameof(UpdateSourceDescription), nameof(CheckUpdatesOnConnect) }) {
             Raise(name);
         }
 

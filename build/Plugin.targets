@@ -4,6 +4,9 @@
     <PluginArtifactDirectory>$(PluginRoot)/artifacts</PluginArtifactDirectory>
     <PluginStageDirectory>$(PluginArtifactDirectory)/stage/$(Configuration)</PluginStageDirectory>
     <PluginChannel Condition="'$(PluginChannel)' == ''">Release</PluginChannel>
+    <PluginFileListName>.obsservices-files</PluginFileListName>
+    <!-- ObsGitStamp below writes its own informational version; keep the SDK from appending the commit a second time. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
   <Import Project="$(PluginRoot)/local.props" Condition="Exists('$(PluginRoot)/local.props')" />
   <PropertyGroup Condition="'$(NinaExecutable)' != ''">
@@ -20,6 +23,50 @@
     <PluginPackageFile Include="$(TargetDir)ObsServices.Core.pdb" Destination="ObsServices.Core.pdb" />
     <PluginPackageFile Include="$(PluginRoot)/LICENSE.txt" Destination="LICENSE.txt" />
   </ItemGroup>
+  <!-- Stamp the assembly with the commit it was built from: AssemblyMetadata GitCommit / GitBranch / GitDate / GitDirty
+       and an informational version like 1.0.0.0+dev.0102f69. The plugin shows these on its options page and the
+       in-app updater compares them with the branch it fetched. Without git (or outside a checkout) the metadata is empty. -->
+  <Target Name="ObsGitStamp" BeforeTargets="GetAssemblyAttributes" Condition="'$(ObsGitStamp)' != 'false'">
+    <Exec Command="git -C &quot;$(PluginRoot)&quot; rev-parse HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true" EchoOff="true" StandardOutputImportance="low" StandardErrorImportance="low" IgnoreStandardErrorWarningFormat="true" ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="ObsGitCommit" />
+      <Output TaskParameter="ExitCode" PropertyName="ObsGitExit" />
+    </Exec>
+    <PropertyGroup Condition="'$(ObsGitExit)' != '0'">
+      <ObsGitCommit></ObsGitCommit>
+    </PropertyGroup>
+    <Exec Condition="'$(ObsGitCommit)' != ''" Command="git -C &quot;$(PluginRoot)&quot; rev-parse --abbrev-ref HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true" EchoOff="true" StandardOutputImportance="low" StandardErrorImportance="low" IgnoreStandardErrorWarningFormat="true" ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="ObsGitBranch" />
+    </Exec>
+    <Exec Condition="'$(ObsGitCommit)' != ''" Command="git -C &quot;$(PluginRoot)&quot; log -1 --format=%25cI HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true" EchoOff="true" StandardOutputImportance="low" StandardErrorImportance="low" IgnoreStandardErrorWarningFormat="true" ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="ObsGitDate" />
+    </Exec>
+    <Exec Condition="'$(ObsGitCommit)' != ''" Command="git -C &quot;$(PluginRoot)&quot; status --porcelain --untracked-files=no" ConsoleToMSBuild="true" IgnoreExitCode="true" EchoOff="true" StandardOutputImportance="low" StandardErrorImportance="low" IgnoreStandardErrorWarningFormat="true" ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="ObsGitStatus" />
+    </Exec>
+    <PropertyGroup Condition="'$(ObsGitCommit)' != ''">
+      <ObsGitDirty>false</ObsGitDirty>
+      <ObsGitDirty Condition="'$(ObsGitStatus)' != ''">true</ObsGitDirty>
+      <ObsGitShort>$(ObsGitCommit.Substring(0, 7))</ObsGitShort>
+      <InformationalVersion>$(Version)+$(ObsGitBranch).$(ObsGitShort)</InformationalVersion>
+      <InformationalVersion Condition="'$(ObsGitDirty)' == 'true'">$(InformationalVersion).dirty</InformationalVersion>
+    </PropertyGroup>
+    <ItemGroup Condition="'$(ObsGitCommit)' != ''">
+      <AssemblyMetadata Include="GitCommit" Value="$(ObsGitCommit)" />
+      <AssemblyMetadata Include="GitBranch" Value="$(ObsGitBranch)" />
+      <AssemblyMetadata Include="GitDate" Value="$(ObsGitDate)" />
+      <AssemblyMetadata Include="GitDirty" Value="$(ObsGitDirty)" />
+    </ItemGroup>
+  </Target>
+  <!-- The in-app updater's target: copy the package into a folder N.I.N.A. installs at its next start
+       (its PluginStaging area), plus a manifest of what belongs to the plugin so stale files can be cleared later.
+       Plain MSBuild, so it needs no PowerShell:  dotnet build -c Release -t:StageForNina -p:NinaStageDirectory=... -->
+  <Target Name="StageForNina" DependsOnTargets="Build">
+    <Error Condition="'$(NinaStageDirectory)' == ''" Text="StageForNina needs -p:NinaStageDirectory=&lt;folder N.I.N.A. deploys from&gt;" />
+    <MakeDir Directories="$(NinaStageDirectory)" />
+    <Copy SourceFiles="@(PluginPackageFile)" DestinationFiles="@(PluginPackageFile->'$(NinaStageDirectory)/%(Destination)')" />
+    <WriteLinesToFile File="$(NinaStageDirectory)/$(PluginFileListName)" Lines="@(PluginPackageFile->'%(Destination)');$(PluginFileListName)" Overwrite="true" Encoding="UTF-8" />
+    <Message Importance="high" Text="Staged plugin for N.I.N.A. in $(NinaStageDirectory)" />
+  </Target>
   <Target Name="StagePlugin" DependsOnTargets="Build">
     <MakeDir Directories="$(PluginArtifactDirectory)" />
     <WriteLinesToFile File="$(PluginArtifactDirectory)/package-files.txt" Lines="@(PluginPackageFile->'%(FullPath)|%(Destination)')" Overwrite="true" Encoding="UTF-8" />

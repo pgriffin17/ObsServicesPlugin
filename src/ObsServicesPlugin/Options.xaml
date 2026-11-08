@@ -5,15 +5,24 @@
     xmlns:local="clr-namespace:ObsServicesPlugin">
 
     <!-- N.I.N.A. shows the template keyed "<plugin title>_Options" on the plugin's page in Options > Plugins.
-         The key must equal the Title in Plugin.props followed by _Options; PluginTests checks that. -->
+         The key must equal the Title in Plugin.props followed by _Options; PluginTests checks that.
+
+         N.I.N.A. restyles every CheckBox as an ON/OFF switch whose template has no content presenter, so a
+         CheckBox's Content never shows. Every switch here therefore has its label in the left column and, where
+         useful, a description to its right (a DockPanel so the description wraps). No explicit styles: an explicit
+         Style on a TextBlock or TextBox would replace N.I.N.A.'s implicit theme style, and keys in this dictionary
+         could shadow N.I.N.A.'s own. -->
+
+
     <DataTemplate x:Key="Obs Services Test Plugin_Options" DataType="{x:Type local:Plugin}">
         <StackPanel Margin="0,10,0,0" Orientation="Vertical">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" MinWidth="180" />
-                    <ColumnDefinition Width="*" MaxWidth="520" />
+                    <ColumnDefinition Width="*" MaxWidth="560" />
                 </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
+                    <!-- 0 Connection -->
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
@@ -23,7 +32,21 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <!-- 9 Control -->
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <!-- 13 Frames -->
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <!-- 21 Update from branch -->
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
@@ -33,65 +56,138 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Service URL" />
-                <TextBox Grid.Row="0" Grid.Column="1" Margin="0,4" Text="{Binding ServiceUrl, UpdateSourceTrigger=LostFocus}" ToolTip="Where the observatory service runs, e.g. https://observatory.services" />
+                <!-- ============================ Connection ============================ -->
+                <TextBlock Grid.Row="0" Grid.ColumnSpan="2" FontWeight="Bold" Margin="0,0,0,6" Text="Connection" />
 
-                <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Site id" />
-                <TextBox Grid.Row="1" Grid.Column="1" Margin="0,4" Text="{Binding SiteId, UpdateSourceTrigger=LostFocus}" ToolTip="The site this N.I.N.A. runs, as in the site's URL" />
+                <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Service URL" />
+                <TextBox Grid.Row="1" Grid.Column="1" Margin="0,4" VerticalAlignment="Center" Text="{Binding ServiceUrl, UpdateSourceTrigger=LostFocus}" ToolTip="Where the observatory service runs, e.g. https://observatory.services" />
 
-                <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Agent token" />
-                <TextBox Grid.Row="2" Grid.Column="1" Margin="0,4" Text="{Binding AgentToken, UpdateSourceTrigger=LostFocus}" ToolTip="Minted in the site's Agent tokens window (tca_…)" />
+                <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Site id" />
+                <TextBox Grid.Row="2" Grid.Column="1" Margin="0,4" VerticalAlignment="Center" Text="{Binding SiteId, UpdateSourceTrigger=LostFocus}" ToolTip="The site this N.I.N.A. runs, as in the site's URL" />
 
-                <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Instrument (optional)" />
-                <TextBox Grid.Row="3" Grid.Column="1" Margin="0,4" Text="{Binding Instrument, UpdateSourceTrigger=LostFocus}" ToolTip="Which of the site's instruments this N.I.N.A. drives; empty for the first" />
+                <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Agent token" />
+                <TextBox Grid.Row="3" Grid.Column="1" Margin="0,4" VerticalAlignment="Center" Text="{Binding AgentToken, UpdateSourceTrigger=LostFocus}" ToolTip="Minted in the site's Agent tokens window (tca_…)" />
 
-                <TextBlock Grid.Row="9" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Sequencer (optional)" />
-                <TextBox Grid.Row="9" Grid.Column="1" Margin="0,4" Text="{Binding Sequencer, UpdateSourceTrigger=LostFocus}" ToolTip="Which of the site's sequencer components this N.I.N.A. publishes itself to; empty for the first. Add a `sequencer` to the site's assembly to see N.I.N.A.'s state and run programs." />
-                <TextBlock Grid.Row="10" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Programs" />
-                <StackPanel Grid.Row="10" Grid.Column="1" Margin="0,4">
-                    <TextBlock Opacity="0.8" TextWrapping="Wrap">
-                        <Run Text="Announced formats: " /><Run Text="{Binding ProgramFormats, Mode=OneWay}" />
-                    </TextBlock>
-                    <CheckBox Margin="0,6,0,0" Content="Allow whole-sequence programs (nina.sequence replaces the loaded sequence and runs it)" IsChecked="{Binding AllowWholeSequences}" ToolTip="Target and template programs are always allowed: they are added to the target area. A whole sequence replaces start, targets and end." />
+                <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Instrument (optional)" />
+                <TextBox Grid.Row="4" Grid.Column="1" Margin="0,4" VerticalAlignment="Center" Text="{Binding Instrument, UpdateSourceTrigger=LostFocus}" ToolTip="Which of the site's instruments this N.I.N.A. drives; empty for the first" />
+
+                <TextBlock Grid.Row="5" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Sequencer (optional)" />
+                <TextBox Grid.Row="5" Grid.Column="1" Margin="0,4" VerticalAlignment="Center" Text="{Binding Sequencer, UpdateSourceTrigger=LostFocus}" ToolTip="Which of the site's sequencer components this N.I.N.A. publishes itself to; empty for the first. Add a `sequencer` to the site's assembly to see N.I.N.A.'s state and run programs." />
+
+                <TextBlock Grid.Row="6" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="State interval (s)" />
+                <TextBox Grid.Row="6" Grid.Column="1" Margin="0,4" VerticalAlignment="Center" Width="80" HorizontalAlignment="Left" Text="{Binding StateIntervalSeconds, UpdateSourceTrigger=LostFocus}" ToolTip="How often mount, camera, filter, focuser and roof state is published" />
+
+                <TextBlock Grid.Row="7" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Roof open joint (mm)" />
+                <TextBox Grid.Row="7" Grid.Column="1" Margin="0,4" VerticalAlignment="Center" Width="80" HorizontalAlignment="Left" Text="{Binding RoofOpenJointValue, UpdateSourceTrigger=LostFocus}" ToolTip="Roof travel reported to the twin when the shutter is open" />
+
+                <TextBlock Grid.Row="8" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Connect at start" />
+                <DockPanel Grid.Row="8" Grid.Column="1" Margin="0,4">
+                    <CheckBox DockPanel.Dock="Left" VerticalAlignment="Center" IsChecked="{Binding AutoConnect}" />
+                    <TextBlock Margin="10,0,0,0" Opacity="0.8" TextWrapping="Wrap" VerticalAlignment="Center" Text="Connect to the service as soon as N.I.N.A. has loaded the plugin." />
+                </DockPanel>
+
+                <!-- ============================ Control ============================ -->
+                <TextBlock Grid.Row="9" Grid.ColumnSpan="2" FontWeight="Bold" Margin="0,16,0,6" Text="Control" />
+
+                <TextBlock Grid.Row="10" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Telemetry only" />
+                <DockPanel Grid.Row="10" Grid.Column="1" Margin="0,4">
+                    <CheckBox DockPanel.Dock="Left" VerticalAlignment="Center" IsChecked="{Binding TelemetryOnly}" ToolTip="Takes effect immediately." />
+                    <TextBlock Margin="10,0,0,0" Opacity="0.8" TextWrapping="Wrap" VerticalAlignment="Center" Text="{Binding ModeDescription}" />
+                </DockPanel>
+
+                <TextBlock Grid.Row="11" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Programs" />
+                <TextBlock Grid.Row="11" Grid.Column="1" Margin="0,4" Opacity="0.8" TextWrapping="Wrap" VerticalAlignment="Center">
+                    <Run Text="Announced formats: " /><Run Text="{Binding ProgramFormats, Mode=OneWay}" />
+                </TextBlock>
+
+                <TextBlock Grid.Row="12" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Whole-sequence programs" />
+                <DockPanel Grid.Row="12" Grid.Column="1" Margin="0,4">
+                    <CheckBox DockPanel.Dock="Left" VerticalAlignment="Center" IsChecked="{Binding AllowWholeSequences}" />
+                    <TextBlock Margin="10,0,0,0" Opacity="0.8" TextWrapping="Wrap" VerticalAlignment="Center" Text="Let a nina.sequence program replace the loaded sequence (start, targets and end) and run it. Target and template programs are always allowed; they are added to the target area." />
+                </DockPanel>
+
+                <!-- ============================ Frames ============================ -->
+                <TextBlock Grid.Row="13" Grid.ColumnSpan="2" FontWeight="Bold" Margin="0,16,0,6" Text="Frames" />
+
+                <TextBlock Grid.Row="14" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Share saved frames" />
+                <DockPanel Grid.Row="14" Grid.Column="1" Margin="0,4">
+                    <CheckBox DockPanel.Dock="Left" VerticalAlignment="Center" IsChecked="{Binding ShareFrames}" />
+                    <TextBlock Margin="10,0,0,0" Opacity="0.8" TextWrapping="Wrap" VerticalAlignment="Center" Text="Every frame N.I.N.A. saves is announced to the service (hash, header, statistics, a small preview) and uploaded when the service asks for it. Off: nothing about frames leaves this machine. Takes effect at the next connect." />
+                </DockPanel>
+
+                <TextBlock Grid.Row="15" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Calibration frames too" />
+                <DockPanel Grid.Row="15" Grid.Column="1" Margin="0,4" IsEnabled="{Binding ShareFrames}">
+                    <CheckBox DockPanel.Dock="Left" VerticalAlignment="Center" IsChecked="{Binding ShareCalibrationFrames}" />
+                    <TextBlock Margin="10,0,0,0" Opacity="0.8" TextWrapping="Wrap" VerticalAlignment="Center" Text="Also share bias, dark and flat frames. Lights are always shared when sharing is on." />
+                </DockPanel>
+
+                <TextBlock Grid.Row="16" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Snapshots too" />
+                <DockPanel Grid.Row="16" Grid.Column="1" Margin="0,4" IsEnabled="{Binding ShareFrames}">
+                    <CheckBox DockPanel.Dock="Left" VerticalAlignment="Center" IsChecked="{Binding ShareSnapshots}" />
+                    <TextBlock Margin="10,0,0,0" Opacity="0.8" TextWrapping="Wrap" VerticalAlignment="Center" Text="Also share snapshots saved from the imaging tab (framing and focus test shots)." />
+                </DockPanel>
+
+                <TextBlock Grid.Row="17" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Spool folder" />
+                <TextBox Grid.Row="17" Grid.Column="1" Margin="0,4" VerticalAlignment="Center" IsEnabled="{Binding ShareFrames}" Text="{Binding SpoolDirectory, UpdateSourceTrigger=LostFocus}" ToolTip="Where plain FITS copies wait for their upload. Empty: %LOCALAPPDATA%\NINA\ObsServices\spool. Your own image files are never touched." />
+
+                <TextBlock Grid.Row="18" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Spool cap (GB)" />
+                <TextBox Grid.Row="18" Grid.Column="1" Margin="0,4" VerticalAlignment="Center" Width="80" HorizontalAlignment="Left" IsEnabled="{Binding ShareFrames}" Text="{Binding SpoolCapGb, UpdateSourceTrigger=LostFocus}" ToolTip="Copies the service already received are dropped oldest first when the spool grows past this. Frames not yet received are never dropped. 0 = no cap." />
+
+                <TextBlock Grid.Row="19" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Delete received copies" />
+                <DockPanel Grid.Row="19" Grid.Column="1" Margin="0,4" IsEnabled="{Binding ShareFrames}">
+                    <CheckBox DockPanel.Dock="Left" VerticalAlignment="Center" IsChecked="{Binding DeleteOnRelease}" />
+                    <TextBlock Margin="10,0,0,0" Opacity="0.8" TextWrapping="Wrap" VerticalAlignment="Center" Text="Delete the spool's copy once the service holds the frame. The file N.I.N.A. saved is never touched." />
+                </DockPanel>
+
+                <TextBlock Grid.Row="20" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Spool status" />
+                <TextBlock Grid.Row="20" Grid.Column="1" Margin="0,4" Opacity="0.8" TextWrapping="Wrap" VerticalAlignment="Center" Text="{Binding SpoolStatus}" />
+
+                <!-- ============================ Update from branch ============================ -->
+                <TextBlock Grid.Row="21" Grid.ColumnSpan="2" FontWeight="Bold" Margin="0,16,0,6" Text="Update from branch" />
+
+                <TextBlock Grid.Row="22" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Running build" />
+                <StackPanel Grid.Row="22" Grid.Column="1" Margin="0,4">
+                    <TextBlock Opacity="0.8" TextWrapping="Wrap" Text="{Binding Updater.InstalledText, Mode=OneWay}" />
+                    <TextBlock Margin="0,4,0,0" Opacity="0.8" TextWrapping="Wrap" Text="Update builds the plugin from a git branch while N.I.N.A. runs and stages it where N.I.N.A. installs plugins from at its next start. Needs git and the .NET SDK on this machine." />
                 </StackPanel>
 
-                <TextBlock Grid.Row="11" Grid.Column="0" Margin="0,12,0,4" VerticalAlignment="Top" Text="Frames" />
-                <StackPanel Grid.Row="11" Grid.Column="1" Margin="0,12,0,4">
-                    <CheckBox Content="Share the frames N.I.N.A. saves with the service" IsChecked="{Binding ShareFrames}" ToolTip="Every saved frame is announced (hash, header, statistics, a small preview) and uploaded when the service asks for it. Off: nothing about frames leaves this machine. Takes effect at the next connect." />
-                    <CheckBox Margin="0,6,0,0" Content="Also share calibration frames (bias, dark, flat)" IsChecked="{Binding ShareCalibrationFrames}" IsEnabled="{Binding ShareFrames}" />
-                    <CheckBox Margin="0,6,0,0" Content="Also share snapshots from the imaging tab" IsChecked="{Binding ShareSnapshots}" IsEnabled="{Binding ShareFrames}" />
+                <TextBlock Grid.Row="23" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Repository" />
+                <TextBox Grid.Row="23" Grid.Column="1" Margin="0,4" VerticalAlignment="Center" Text="{Binding UpdateRepositoryUrl, UpdateSourceTrigger=LostFocus}" ToolTip="The git URL to build from" />
+
+                <TextBlock Grid.Row="24" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Branch" />
+                <TextBox Grid.Row="24" Grid.Column="1" Margin="0,4" VerticalAlignment="Center" Width="160" HorizontalAlignment="Left" Text="{Binding UpdateBranch, UpdateSourceTrigger=LostFocus}" ToolTip="dev for N.I.N.A. 3.3, nina-3.2 for 3.2" />
+
+                <TextBlock Grid.Row="25" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Source folder (optional)" />
+                <StackPanel Grid.Row="25" Grid.Column="1" Margin="0,4">
+                    <TextBox VerticalAlignment="Center" Text="{Binding UpdateSourceDirectory, UpdateSourceTrigger=LostFocus}" ToolTip="A checkout of your own to build from. Empty: the plugin keeps its own clone under %LOCALAPPDATA%\NINA\ObsServices\src." />
+                    <TextBlock Margin="0,4,0,0" Opacity="0.8" TextWrapping="Wrap" Text="{Binding UpdateSourceDescription}" />
                 </StackPanel>
 
-                <TextBlock Grid.Row="12" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Spool folder" />
-                <TextBox Grid.Row="12" Grid.Column="1" Margin="0,4" Text="{Binding SpoolDirectory, UpdateSourceTrigger=LostFocus}" IsEnabled="{Binding ShareFrames}" ToolTip="Where plain FITS copies wait for their upload. Empty: %LOCALAPPDATA%\NINA\ObsServices\spool. Your own image files are never touched." />
+                <TextBlock Grid.Row="26" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Check when connecting" />
+                <DockPanel Grid.Row="26" Grid.Column="1" Margin="0,4">
+                    <CheckBox DockPanel.Dock="Left" VerticalAlignment="Center" IsChecked="{Binding CheckUpdatesOnConnect}" />
+                    <TextBlock Margin="10,0,0,0" Opacity="0.8" TextWrapping="Wrap" VerticalAlignment="Center" Text="Fetch the branch on every connect and report how far behind this build is. Never builds on its own." />
+                </DockPanel>
 
-                <TextBlock Grid.Row="13" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Spool cap (GB)" />
-                <StackPanel Grid.Row="13" Grid.Column="1" Margin="0,4" Orientation="Horizontal">
-                    <TextBox Width="80" Text="{Binding SpoolCapGb, UpdateSourceTrigger=LostFocus}" IsEnabled="{Binding ShareFrames}" ToolTip="Copies the service already received are dropped oldest first when the spool grows past this. Frames not yet received are never dropped. 0 = no cap." />
-                    <CheckBox Margin="16,0,0,0" VerticalAlignment="Center" Content="Delete copies once the service has them" IsChecked="{Binding DeleteOnRelease}" IsEnabled="{Binding ShareFrames}" />
+                <StackPanel Grid.Row="27" Grid.Column="1" Margin="0,8,0,4">
+                    <StackPanel Orientation="Horizontal">
+                        <Button MinWidth="110" Margin="0,0,8,0" Command="{Binding Updater.CheckCommand}" Content="Check" ToolTip="Fetch the branch and compare with the running build" />
+                        <Button MinWidth="110" Margin="0,0,8,0" Command="{Binding Updater.UpdateCommand}" Content="Update" ToolTip="Sync the branch, build, and stage the result for N.I.N.A.'s next start" />
+                        <Button MinWidth="90" Margin="0,0,8,0" Command="{Binding Updater.CancelCommand}" Content="Cancel" />
+                        <Button MinWidth="130" Command="{Binding Updater.RestartCommand}" Content="Restart N.I.N.A." ToolTip="Enabled once an update is staged. Asks first; refused while a sequence runs." />
+                    </StackPanel>
+                    <TextBlock Margin="0,6,0,0" TextWrapping="Wrap" Text="{Binding Updater.Status}" />
+                    <TextBox Margin="0,6,0,0" MaxHeight="140" IsReadOnly="True" FontFamily="Consolas" FontSize="11" VerticalScrollBarVisibility="Auto" TextWrapping="NoWrap" HorizontalScrollBarVisibility="Auto" Text="{Binding Updater.Log, Mode=OneWay}" />
                 </StackPanel>
-
-                <TextBlock Grid.Row="14" Grid.Column="1" Margin="0,0,0,4" Opacity="0.8" Text="{Binding SpoolStatus}" TextWrapping="Wrap" />
-
-                <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="State interval (s)" />
-                <TextBox Grid.Row="4" Grid.Column="1" Margin="0,4" Width="80" HorizontalAlignment="Left" Text="{Binding StateIntervalSeconds, UpdateSourceTrigger=LostFocus}" />
-
-                <TextBlock Grid.Row="5" Grid.Column="0" Margin="0,4" VerticalAlignment="Center" Text="Roof open joint (mm)" />
-                <TextBox Grid.Row="5" Grid.Column="1" Margin="0,4" Width="80" HorizontalAlignment="Left" Text="{Binding RoofOpenJointValue, UpdateSourceTrigger=LostFocus}" ToolTip="Roof travel reported to the twin when the shutter is open" />
-
-                <TextBlock Grid.Row="6" Grid.Column="0" Margin="0,12,0,4" VerticalAlignment="Center" Text="Mode" />
-                <CheckBox Grid.Row="6" Grid.Column="1" Margin="0,12,0,4" Content="Telemetry only (publish state, accept no tasks or commands)" IsChecked="{Binding TelemetryOnly}" ToolTip="Takes effect immediately. Untick to let the service assign observations and send stop, park, unpark, roof and safe commands." />
-                <TextBlock Grid.Row="7" Grid.Column="1" Margin="0,0,0,4" Opacity="0.8" Text="{Binding ModeDescription}" TextWrapping="Wrap" />
-
-                <CheckBox Grid.Row="8" Grid.Column="1" Margin="0,8,0,4" Content="Connect when N.I.N.A. starts" IsChecked="{Binding AutoConnect}" />
             </Grid>
 
-            <StackPanel Margin="0,12,0,0" Orientation="Horizontal">
+            <!-- ============================ Connection buttons ============================ -->
+            <StackPanel Margin="0,16,0,0" Orientation="Horizontal">
                 <Button MinWidth="110" Margin="0,0,8,0" Command="{Binding ConnectCommand}" Content="Connect" />
                 <Button MinWidth="110" Margin="0,0,16,0" Command="{Binding DisconnectCommand}" Content="Disconnect" />
                 <TextBlock VerticalAlignment="Center" FontWeight="Bold" Text="{Binding Status}" />
             </StackPanel>
-            <TextBlock Margin="0,6,0,0" Opacity="0.8" Text="{Binding LastMessage}" TextWrapping="Wrap" />
+            <TextBlock Margin="0,6,0,0" Opacity="0.8" TextWrapping="Wrap" Text="{Binding LastMessage}" />
         </StackPanel>
     </DataTemplate>
 </ResourceDictionary>
