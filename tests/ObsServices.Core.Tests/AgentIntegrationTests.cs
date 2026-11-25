@@ -313,6 +313,118 @@ public class AgentIntegrationTests {
         }
     }
 
+    /// <summary>
+    /// Observation requests hand an instrument short tasks in quick succession and keep a couple queued ahead.
+    /// They must run one after another in the order received (or the order of the last <c>plan</c>), never two
+    /// at once, and a task whose window closed while it waited is skipped with the words the other agents use
+    /// (mirrors <c>a_task_whose_window_has_closed_is_skipped_not_run_late</c> in the service's own tests).
+    /// </summary>
+    [Test]
+    public async Task TasksRunOneAtATimeInOrderAndAClosedWindowIsSkipped() {
+        var siteId = "csqueue-" + Guid.NewGuid().ToString("N")[..8];
+        await ServerFixture.PostAsync("/api/sites", new { id = siteId, name = "queue", from_assembly = "observatory", location = new { lat_deg = Lat, lon_deg = Lon } });
+
+        try {
+            var manifest = await ServerFixture.GetAsync($"/api/sites/{siteId}/entities");
+            var mount = manifest["instruments"]![0]!["id"]!.GetValue<string>();
+            var token = (await ServerFixture.PostAsync($"/api/sites/{siteId}/agent-tokens", new { label = "queue" }))["token"]!.GetValue<string>();
+            var agent = TestAgent.Create(ServerFixture.BaseUrl!, siteId, token, Lat, Lon);
+            agent.StateInterval = TimeSpan.FromMilliseconds(200);
+            agent.Clock.TimeScale = 0.1; // slow enough that the first task is still running when the plan arrives
+            using var runCts = new CancellationTokenSource();
+            var runner = agent.RunAsync(runCts.Token);
+
+            try {
+                await agent.Ready.WaitAsync(TimeSpan.FromSeconds(10));
+                var now = agent.Now();
+                var target = new { name = "Polaris", ra_deg = 37.95, dec_deg = 89.26 };
+
+                async Task<string> Post(string name, double seconds, int count, object? constraints = null) {
+                    var record = await ServerFixture.PostAsync($"/api/sites/{siteId}/tasks", new {
+                        name, instrument = mount, target,
+                        sequence = new[] { new { filter = "L", seconds, count } },
+                        constraints = constraints ?? new { latest = now + 86400 },
+                    });
+                    return record["task"]!["id"]!.GetValue<string>();
+                }
+
+                // four tasks within a second: one whose window closed an hour ago, then three live ones
+                var late = await Post("late", 10, 1, new { earliest = now - 7200, latest = now - 60 });
+                var first = await Post("first", 10, 2);
+                var second = await Post("second", 1, 2);
+                var third = await Post("third", 1, 1);
+
+                // the service's order for the queue: third before second (first is already running or about to)
+                await WaitForState(siteId, s => Status(s, first) == "running", TimeSpan.FromSeconds(10));
+                await ServerFixture.PostAsync($"/api/sites/{siteId}/plan", new { instrument = mount, order = new[] { third, second } });
+                var planDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+
+                while (!agent.QueuedTasks.SequenceEqual(new[] { third, second }) && DateTime.UtcNow < planDeadline) {
+                    await Task.Delay(50); // the assign and the plan travel the socket after the HTTP replies
+                }
+
+                Assert.That(agent.QueuedTasks, Is.EqualTo(new[] { third, second }), "the plan reordered the queue");
+
+                // watch the whole run: never two tasks running, and note the order they start in
+                var started = new List<string>();
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(40);
+                JsonNode state;
+
+                do {
+                    state = await ServerFixture.GetAsync($"/api/sites/{siteId}/state");
+                    var running = state["tasks"]!.AsArray().Where(t => t!["status"]!.GetValue<string>() == "running").Select(t => t!["task"]!["id"]!.GetValue<string>()).ToList();
+                    Assert.That(running.Count, Is.LessThanOrEqualTo(1), $"two tasks running at once: {string.Join(", ", running)}");
+                    Assert.That(agent.RunningTasks.Count, Is.LessThanOrEqualTo(1));
+
+                    foreach (var id in running.Where(id => !started.Contains(id))) {
+                        started.Add(id);
+                    }
+
+                    await Task.Delay(100);
+                } while (!(IsTerminal(Status(state, third)) && IsTerminal(Status(state, second))) && DateTime.UtcNow < deadline);
+
+                var tasks = state["tasks"]!.AsArray().ToDictionary(t => t!["task"]!["id"]!.GetValue<string>(), t => t!);
+                Assert.That(tasks[late]["status"]!.GetValue<string>(), Is.EqualTo("skipped"), tasks[late].ToJsonString());
+                Assert.That(tasks[late]["message"]!.GetValue<string>(), Is.EqualTo("its window had closed"));
+                Assert.That(tasks[first]["status"]!.GetValue<string>(), Is.EqualTo("completed"), tasks[first].ToJsonString());
+                Assert.That(tasks[second]["status"]!.GetValue<string>(), Is.EqualTo("completed"), tasks[second].ToJsonString());
+                Assert.That(tasks[third]["status"]!.GetValue<string>(), Is.EqualTo("completed"), tasks[third].ToJsonString());
+
+                // the late task never moved the hardware; the others ran strictly in turn, in the planned order
+                Assert.That(agent.Camera.Exposures.Select(e => e.TaskId), Is.EqualTo(new[] { first, first, third, second, second }));
+                Assert.That(agent.Mount.Calls.Count(c => c.StartsWith("slew")), Is.EqualTo(3), "one slew per task that ran");
+                Assert.That(started.Take(1), Is.EqualTo(new[] { first }));
+                Assert.That(started.Skip(1).Where(id => id == third || id == second), Is.EqualTo(new[] { third, second }), "the plan put third before second");
+                Assert.That(agent.QueuedTasks, Is.Empty);
+                Assert.That(agent.RunningTasks, Is.Empty);
+
+                // a finished task handed over again (its report was lost with the link) is answered, not re-run
+                var exposures = agent.Camera.Exposures.Count;
+                Assert.That(agent.FinishedTask(first), Is.EqualTo((ObservationStatus.Completed, "done")));
+                await agent.InjectAsync(new TaskAssign { Task = new ObservationTask { Id = first, Name = "first again", Instrument = mount, Target = new Target { Name = "Polaris", RaDeg = 37.95, DecDeg = 89.26 }, Sequence = { new Exposure { Filter = "L", Seconds = 1, Count = 1 } } } });
+                await Task.Delay(500);
+                Assert.That(agent.Camera.Exposures.Count, Is.EqualTo(exposures), "no new exposure");
+                Assert.That(agent.RunningTasks.Concat(agent.QueuedTasks), Is.Empty);
+                Assert.That(Status(await ServerFixture.GetAsync($"/api/sites/{siteId}/state"), first), Is.EqualTo("completed"));
+            } finally {
+                agent.Stop();
+                runCts.Cancel();
+
+                try {
+                    await runner.WaitAsync(TimeSpan.FromSeconds(10));
+                } catch (Exception) {
+                }
+
+                TestContext.Out.WriteLine(string.Join("\n", agent.Logged));
+            }
+        } finally {
+            await ServerFixture.DeleteAsync($"/api/sites/{siteId}");
+        }
+    }
+
+    private static string Status(JsonNode state, string taskId) =>
+        state["tasks"]!.AsArray().FirstOrDefault(t => t!["task"]!["id"]!.GetValue<string>() == taskId)?["status"]?.GetValue<string>() ?? "unknown";
+
     private static async Task<JsonNode> WaitForSet(string siteId, string requestId, TimeSpan timeout) {
         var deadline = DateTime.UtcNow + timeout;
         JsonNode rec;

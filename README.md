@@ -39,7 +39,11 @@ tests/ObsServicesPlugin.Tests N.I.N.A.-hosted tests; need the Windows desktop ru
    joints: hour angle and declination, or on a German equatorial the flipped pose past the pole when N.I.N.A.
    reports the tube west of the pier), `pier_side`, mode, sky RA and Dec, camera state and temperature, filter,
    focus position, shutter state.
-4. Tasks the service assigns run through N.I.N.A.: open the shutter, unpark, slew (J2000 in, N.I.N.A. transforms),
+4. Tasks run **one at a time, in the order received** (or the order of the service's last `plan`); a task is
+   judged only when its turn comes: one whose `constraints.latest` has passed is reported `skipped` with
+   `its window had closed` and never moves the hardware (the link may have been down while it waited). A
+   task that is already running is never aborted for its window. Stop and the like drop the queue too.
+5. Tasks the service assigns run through N.I.N.A.: open the shutter, unpark, slew (J2000 in, N.I.N.A. transforms),
    change filter, expose through the imaging mediator and the normal image save pipeline, report frames and
    progress on the task entity. Cancel aborts the exposure. Commands stop, park, unpark, open/close roof and
    safe map to the matching mediator calls; `set_time_scale` is acked as unsupported. Tasks that carry a
@@ -70,8 +74,11 @@ switches. The plugin writes its own plain FITS copy into a **spool** folder (def
 `%LOCALAPPDATA%\NINA\ObsServices\spool`) with N.I.N.A.'s FITS writer, so the user's XISF, TIFF or compressed output
 is untouched and irrelevant; the spool is capped (20 GB by default; only frames the service already received are
 evicted) and survives restarts: the inventory sent after every reconnect lets the service fetch what it missed.
-Add an **`uploader`** component to the site's assembly and the plugin publishes the spool to it: frames and bytes
-waiting, free disk, upload rate, age of the oldest frame. Frames taken while a task runs are tagged with it; frames
+Uploads share the uplink with telemetry and task reports, which go first: they are capped (*Upload cap*, 8 Mbit/s
+by default for all uploads together, below the grant's own `rate_bps` when the service sets one) and pause at the
+next chunk whenever the agent socket is down, resuming 10 s after it is back. Add an **`uploader`** component to the
+site's assembly and the plugin publishes the spool to it: frames and bytes waiting, free disk, upload rate, age of
+the oldest frame. Frames taken while a task runs are tagged with it; frames
 taken by hand are announced too. Sharing is off by default and independent of telemetry-only mode: frames only ever
 leave the machine, so the mode does not gate them.
 
@@ -98,9 +105,14 @@ that the manifest does not list into N.I.N.A.'s deletion area, so a dependency a
 The agent retries forever: a failed or dropped connection is retried after 1 s, doubling to a cap of 60 s, and a
 successful connect resets the pause. A handshake that stalls is abandoned after 15 s; an unanswered WebSocket ping
 closes a half-open connection after 30 s. The reason for the last failure, including the HTTP status of a refused
-token, is in the plugin's status line and N.I.N.A.'s log. State keeps being sampled through an outage and up to
-20,000 messages are replayed with their original timestamps once the service is back, so the site's history has no
-gap. Running tasks continue locally and report their outcome on reconnect.
+token, is in the plugin's status line and N.I.N.A.'s log, which also records every session's open and close with
+its duration and reason. Nothing that publishes ever waits on the socket: messages go into an outbox that a sender
+drains, so state keeps being sampled once a second through an outage **or a stalled link**, and up to 20,000
+messages are replayed with their original timestamps once the service is back, so the site's history has no gap. A
+message the socket does not accept within 15 s means the link is stalled (the service stopped reading, or the uplink
+is choked): the socket is abandoned and the message kept for the next session. Running tasks continue locally and
+report their outcome on reconnect; the agent remembers the last 500 outcomes, so a task the service hands over
+again because its report was lost is answered with the stored result, never run twice.
 
 ## Develop on Linux
 

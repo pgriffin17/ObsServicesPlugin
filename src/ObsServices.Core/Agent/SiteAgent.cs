@@ -21,8 +21,14 @@ public abstract class SiteAgent {
 
     private readonly CancellationTokenSource stopping = new();
     private readonly SemaphoreSlim sendLock = new(1, 1);
-    private readonly Queue<Up> backlog = new();
+    private readonly Queue<Up> outbox = new();
+    private readonly SemaphoreSlim outboxSignal = new(0, int.MaxValue);
+    private readonly Dictionary<string, (ObservationStatus Status, string Message)> finished = new();
+    private readonly Queue<string> finishedOrder = new();
+    private double connectedSince;
     private readonly Dictionary<string, (TaskHandle Handle, Task Run)> tasks = new();
+    private readonly List<TaskHandle> queue = new();
+    private TaskHandle? current;
     private readonly object gate = new();
     private readonly HashSet<string> uploading = new();
     private readonly Queue<(double T, long Bytes)> sent = new();
@@ -64,6 +70,25 @@ public abstract class SiteAgent {
     /// half-open socket is only noticed when TCP reports it.
     /// </summary>
     public TimeSpan KeepAliveTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// A single message not accepted by the socket within this long means the link is stalled (the service
+    /// stopped reading, or the uplink is choked): the socket is abandoned and the message kept for the next
+    /// session. Sampling never waits on a send, so a stall costs no readings.
+    /// </summary>
+    public TimeSpan SendTimeout { get; set; } = TimeSpan.FromSeconds(15);
+
+    /// <summary>How many finished tasks the agent remembers, to answer a re-assignment with the stored result instead of running the task again.</summary>
+    public int FinishedMemory { get; set; } = 500;
+
+    /// <summary>
+    /// Cap on upload bandwidth for all frame uploads together, bytes per second; null = whatever the grant
+    /// allows. Uploads share the uplink with telemetry, and an unpaced upload of a large frame can starve it.
+    /// </summary>
+    public long? UploadRateCapBps { get; set; }
+
+    /// <summary>Uploads wait until the socket has been up this long, so a link that just came back carries telemetry first.</summary>
+    public TimeSpan UploadSettleDelay { get; set; } = TimeSpan.FromSeconds(10);
 
     /// <summary>Why the last connection attempt or session ended, for status displays. Null while healthy.</summary>
     public string? LastError { get; private set; }
@@ -261,8 +286,17 @@ public abstract class SiteAgent {
                 delay = TimeSpan.FromSeconds(1);
                 ConsecutiveFailures = 0;
                 LastError = null;
-                await SessionAsync(ws, ct).ConfigureAwait(false);
+                var opened = DateTime.UtcNow;
+
+                try {
+                    await SessionAsync(ws, ct).ConfigureAwait(false);
+                } catch (Exception e) when (!ct.IsCancellationRequested) {
+                    Log(Level.Warn, $"agent socket: session ended after {Describe(DateTime.UtcNow - opened)}: {DescribeFailure(ws, e)}");
+                    throw;
+                }
+
                 LastError = "connection closed by the service";
+                Log(Level.Info, $"agent socket: closed by the service after {Describe(DateTime.UtcNow - opened)}");
             } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
                 break;
             } catch (Exception e) {
@@ -305,6 +339,8 @@ public abstract class SiteAgent {
 
     public bool IsStopping => stopping.IsCancellationRequested;
 
+    private static string Describe(TimeSpan d) => d.TotalSeconds < 90 ? $"{d.TotalSeconds:0}s" : $"{d.TotalMinutes:0.#}min";
+
     /// <summary>A refused handshake names its HTTP status, so a bad token reads differently from a down server.</summary>
     private static string DescribeFailure(ClientWebSocket ws, Exception e) {
         var status = ws.HttpStatusCode;
@@ -339,22 +375,49 @@ public abstract class SiteAgent {
 
         var hello = new Hello { Agent = Name, Version = Version, Protocol = ProtocolJson.Version, Capabilities = capabilities, Entities = Entities().ToList() };
         await SendRawAsync(ws, hello, ct).ConfigureAwait(false);
+        int waiting;
 
-        // replay what the outage swallowed; the service keys samples on timestamp
-        while (true) {
-            Up? queued;
-
-            lock (gate) {
-                if (!backlog.TryDequeue(out queued)) {
-                    break;
-                }
-            }
-
-            await SendRawAsync(ws, queued, ct).ConfigureAwait(false);
+        lock (gate) {
+            waiting = outbox.Count;
         }
 
+        Log(Level.Info, waiting == 0 ? "agent socket: connected" : $"agent socket: connected; replaying {waiting} message(s) the outage swallowed");
+        connectedSince = Now();
         Connected.Set();
 
+        // the sender drains the outbox (the backlog first, then whatever is published from now on); when it
+        // fails, the stalled socket is abandoned and the receive loop below is cut short with the sender's error
+        using var session = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        Exception? sendError = null;
+        var sender = SendLoopAsync(ws, session.Token);
+        _ = sender.ContinueWith(t => {
+            if (t.IsFaulted) {
+                sendError = t.Exception!.GetBaseException();
+            }
+
+            session.Cancel();
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
+        try {
+            await ReceiveLoopAsync(ws, session.Token).ConfigureAwait(false);
+        } catch (OperationCanceledException) when (!ct.IsCancellationRequested && sendError != null) {
+            throw sendError;
+        } finally {
+            session.Cancel();
+
+            try {
+                await sender.ConfigureAwait(false);
+            } catch (Exception) {
+                // reported through sendError or irrelevant once the session is over
+            }
+
+            Connected.Reset();
+            socket = null;
+            PruneOutbox();
+        }
+    }
+
+    private async Task ReceiveLoopAsync(ClientWebSocket ws, CancellationToken ct) {
         try {
             var buffer = new ArraySegment<byte>(new byte[64 * 1024]);
             using var frame = new MemoryStream();
@@ -459,33 +522,64 @@ public abstract class SiteAgent {
 
     public Task EventAsync(string message, Level level = Level.Info) => SendAsync(new Event { T = Now(), Level = level, Message = message });
 
-    private async Task SendAsync(Up message) {
-        var ws = socket;
+    /// <summary>
+    /// Queue a message for the sender. Never waits on the socket: a stalled or absent link costs the caller
+    /// nothing, and the message goes out when the link is back (the kinds the service replays, that is; an
+    /// ack for a session that is gone is dropped with it, see <see cref="PruneOutbox"/>).
+    /// </summary>
+    private Task SendAsync(Up message) {
+        lock (gate) {
+            while (outbox.Count >= BacklogLimit) {
+                outbox.Dequeue();
+            }
 
-        if (ws == null || ws.State != WebSocketState.Open) {
-            Backlog(message);
-            return;
+            outbox.Enqueue(message);
         }
 
-        try {
-            await SendRawAsync(ws, message, stopping.Token).ConfigureAwait(false);
-        } catch (Exception) when (!stopping.IsCancellationRequested) {
-            Backlog(message);
+        outboxSignal.Release();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Messages waiting to be sent (the backlog while the link is down).</summary>
+    public int Pending {
+        get {
+            lock (gate) return outbox.Count;
         }
     }
 
-    private void Backlog(Up message) {
-        // the same kinds the service's Python agent replays after an outage
-        if (message is not (StateMsg or Event or ImageCaptured)) {
-            return;
-        }
-
+    /// <summary>After a session: keep what the service replays by timestamp, drop what only made sense in that session.</summary>
+    private void PruneOutbox() {
         lock (gate) {
-            while (backlog.Count >= BacklogLimit) {
-                backlog.Dequeue();
+            var keep = outbox.Where(m => m is StateMsg or Event or ImageCaptured).ToList();
+            outbox.Clear();
+
+            foreach (var m in keep) {
+                outbox.Enqueue(m);
+            }
+        }
+    }
+
+    private async Task SendLoopAsync(ClientWebSocket ws, CancellationToken ct) {
+        while (!ct.IsCancellationRequested) {
+            Up? next;
+
+            lock (gate) {
+                next = outbox.Count > 0 ? outbox.Peek() : null;
             }
 
-            backlog.Enqueue(message);
+            if (next == null) {
+                await outboxSignal.WaitAsync(ct).ConfigureAwait(false);
+                continue;
+            }
+
+            await SendRawAsync(ws, next, ct).ConfigureAwait(false);
+
+            lock (gate) {
+                // the head is only dequeued once it is on the wire; a failed send leaves it for the next session
+                if (outbox.Count > 0 && ReferenceEquals(outbox.Peek(), next)) {
+                    outbox.Dequeue();
+                }
+            }
         }
     }
 
@@ -494,11 +588,22 @@ public abstract class SiteAgent {
         await sendLock.WaitAsync(ct).ConfigureAwait(false);
 
         try {
-            await ws.SendAsync(bytes, WebSocketMessageType.Text, true, ct).ConfigureAwait(false);
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            limit.CancelAfter(SendTimeout);
+
+            try {
+                await ws.SendAsync(bytes, WebSocketMessageType.Text, true, limit.Token).ConfigureAwait(false);
+            } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
+                ws.Abort();
+                throw new TimeoutException($"the socket accepted nothing for {SendTimeout.TotalSeconds:0}s (stalled link)");
+            }
         } finally {
             sendLock.Release();
         }
     }
+
+    /// <summary>For tests: feed the agent a message as if the service had sent it.</summary>
+    internal Task InjectAsync(Down message) => DispatchAsync(message, stopping.Token);
 
     // ---- receiving ------------------------------------------------------------------------------
 
@@ -528,24 +633,11 @@ public abstract class SiteAgent {
                 break;
 
             case TaskCancel cancel:
-                TaskHandle? handle;
-
-                lock (gate) {
-                    handle = tasks.TryGetValue(cancel.TaskId, out var entry) ? entry.Handle : null;
-                }
-
-                if (handle != null) {
-                    handle.Cancellation.Cancel();
-                } else {
-                    var m = new StateMsg(Now());
-                    m.Set(cancel.TaskId, Channels.TaskStatus, ObservationStatus.Cancelled.AsString());
-                    m.Set(cancel.TaskId, Channels.TaskMessage, "cancelled");
-                    await PublishAsync(m).ConfigureAwait(false);
-                }
-
+                await CancelTaskAsync(cancel.TaskId, "cancelled").ConfigureAwait(false);
                 break;
 
             case Plan plan:
+                Reorder(plan.Order);
                 await OnPlanAsync(plan.Instrument, plan.Order, ct).ConfigureAwait(false);
                 break;
 
@@ -596,16 +688,159 @@ public abstract class SiteAgent {
         await SendAsync(ack).ConfigureAwait(false);
     }
 
+    // ---- the task queue ------------------------------------------------------------------------
+    //
+    // Tasks run one at a time, in the order they arrived unless a `plan` says otherwise: the service
+    // hands an instrument short tasks just in time and keeps a couple queued ahead, and a task is only
+    // judged (accepted, inside its window) at the moment it is about to start, not when it arrives.
+
+    /// <summary>Take a task: queued behind whatever is open, started when its turn comes. A known id is ignored (the service re-sends open tasks on reconnect).</summary>
     private void StartTask(ObservationTask task) {
+        (ObservationStatus Status, string Message) done;
+
         lock (gate) {
             if (tasks.ContainsKey(task.Id)) {
                 return;
             }
 
+            if (finished.TryGetValue(task.Id, out done)) {
+                // the service never heard how this one ended (the report was lost with the link): tell it
+                // again rather than running the task a second time
+                Log(Level.Info, $"task {task.Id} was handed over again; it already ended {done.Status.AsString()} ({done.Message})");
+                _ = PublishAsync(StateMsg.TaskUpdate(task.Id, done.Status, done.Status == ObservationStatus.Completed ? 1.0 : null, done.Message, Now()));
+                return;
+            }
+
             var handle = new TaskHandle(task, this, stopping.Token);
-            var run = Task.Run(() => RunTaskWrapperAsync(handle), CancellationToken.None);
-            tasks[task.Id] = (handle, run);
+            tasks[task.Id] = (handle, Task.CompletedTask);
+            queue.Add(handle);
         }
+
+        Pump();
+    }
+
+    /// <summary>Record how a task ended, so a re-assignment after a lost report is answered, not re-run.</summary>
+    private void Remember(string taskId, ObservationStatus status, string message) {
+        lock (gate) {
+            if (!finished.ContainsKey(taskId)) {
+                finishedOrder.Enqueue(taskId);
+            }
+
+            finished[taskId] = (status, message);
+
+            while (finishedOrder.Count > Math.Max(0, FinishedMemory)) {
+                finished.Remove(finishedOrder.Dequeue());
+            }
+        }
+    }
+
+    /// <summary>How a task this agent finished ended, while it is still remembered.</summary>
+    public (ObservationStatus Status, string Message)? FinishedTask(string taskId) {
+        lock (gate) {
+            return finished.TryGetValue(taskId, out var f) ? f : null;
+        }
+    }
+
+    /// <summary>Start the next queued task when none is running.</summary>
+    private void Pump() {
+        TaskHandle? next;
+
+        lock (gate) {
+            if (current != null || queue.Count == 0) {
+                return;
+            }
+
+            next = queue[0];
+            queue.RemoveAt(0);
+            current = next;
+            var run = Task.Run(() => RunTaskWrapperAsync(next), CancellationToken.None);
+            tasks[next.Task.Id] = (next, run);
+        }
+    }
+
+    /// <summary>The service's order for the tasks not yet started; tasks it leaves out keep their relative order after the named ones.</summary>
+    private void Reorder(IReadOnlyList<string> order) {
+        lock (gate) {
+            if (queue.Count < 2) {
+                return;
+            }
+
+            var rest = queue.ToList();
+            queue.Clear();
+
+            foreach (var id in order) {
+                var at = rest.FindIndex(h => h.Task.Id == id);
+
+                if (at >= 0) {
+                    queue.Add(rest[at]);
+                    rest.RemoveAt(at);
+                }
+            }
+
+            queue.AddRange(rest);
+        }
+    }
+
+    /// <summary>Cancel a task: a queued one is dropped and reported at once, a running one sees its token fire, an unknown one is reported cancelled so the service can close it.</summary>
+    private async Task CancelTaskAsync(string taskId, string message) {
+        TaskHandle? handle;
+        var queued = false;
+
+        lock (gate) {
+            handle = tasks.TryGetValue(taskId, out var entry) ? entry.Handle : null;
+
+            if (handle != null && queue.Remove(handle)) {
+                queued = true;
+                tasks.Remove(taskId);
+            }
+        }
+
+        if (handle != null && !queued) {
+            handle.Cancellation.Cancel();
+            return;
+        }
+
+        if (queued) {
+            handle!.Closed = true;
+            handle.Cancellation.Dispose();
+            Remember(taskId, ObservationStatus.Cancelled, message);
+        }
+
+        await PublishAsync(StateMsg.TaskUpdate(taskId, ObservationStatus.Cancelled, null, message, Now())).ConfigureAwait(false);
+    }
+
+    /// <summary>Drop every queued task, reporting each as cancelled with <paramref name="message"/>.</summary>
+    private void DropQueued(string message) {
+        List<TaskHandle> dropped;
+
+        lock (gate) {
+            dropped = queue.ToList();
+            queue.Clear();
+
+            foreach (var h in dropped) {
+                tasks.Remove(h.Task.Id);
+            }
+        }
+
+        foreach (var h in dropped) {
+            h.Closed = true;
+            h.Cancellation.Dispose();
+            Remember(h.Task.Id, ObservationStatus.Cancelled, message);
+            _ = PublishAsync(StateMsg.TaskUpdate(h.Task.Id, ObservationStatus.Cancelled, null, message, Now()));
+        }
+    }
+
+    private void Finish(TaskHandle handle) {
+        lock (gate) {
+            tasks.Remove(handle.Task.Id);
+
+            if (ReferenceEquals(current, handle)) {
+                current = null;
+            }
+        }
+
+        handle.Cancellation.Dispose();
+        Pump();
     }
 
     private async Task RunTaskWrapperAsync(TaskHandle handle) {
@@ -617,13 +852,18 @@ public abstract class SiteAgent {
             await Ready.WaitAsync(handle.Cancelled).ConfigureAwait(false);
 
             if (!AcceptTask(handle.Task, out var reason)) {
+                Remember(id, ObservationStatus.Skipped, reason ?? "declined by the agent");
                 await PublishAsync(StateMsg.TaskUpdate(id, ObservationStatus.Skipped, null, reason ?? "declined by the agent", Now())).ConfigureAwait(false);
+                Finish(handle);
+                return;
+            }
 
-                lock (gate) {
-                    tasks.Remove(id);
-                }
-
-                handle.Cancellation.Dispose();
+            // a task whose window has closed is not started late: the link may have been down while it
+            // waited, and the service has moved on (the same words the other agents use)
+            if (handle.Task.Constraints?.Latest is double latest && Now() > latest) {
+                Remember(id, ObservationStatus.Skipped, "its window had closed");
+                await PublishAsync(StateMsg.TaskUpdate(id, ObservationStatus.Skipped, null, "its window had closed", Now())).ConfigureAwait(false);
+                Finish(handle);
                 return;
             }
 
@@ -646,34 +886,38 @@ public abstract class SiteAgent {
         }
 
         handle.Closed = true;
+        Remember(id, status, message);
         var final = StateMsg.TaskUpdate(id, status, status == ObservationStatus.Completed ? 1.0 : null, message, Now());
         await PublishAsync(final).ConfigureAwait(false);
-
-        lock (gate) {
-            tasks.Remove(id);
-        }
-
-        handle.Cancellation.Dispose();
+        Finish(handle);
     }
 
-    /// <summary>Fire every running task's <see cref="TaskHandle.Cancelled"/>; they report <c>cancelled</c> as they unwind.</summary>
+    /// <summary>Stop: the running task sees its <see cref="TaskHandle.Cancelled"/> fire and reports <c>cancelled</c> as it unwinds; queued tasks are dropped and reported at once.</summary>
     protected void CancelRunningTasks() {
-        List<TaskHandle> running;
+        TaskHandle? running;
 
         lock (gate) {
-            running = tasks.Values.Select(t => t.Handle).ToList();
+            running = current;
         }
 
-        foreach (var handle in running) {
-            handle.Cancellation.Cancel();
-        }
+        DropQueued("cancelled");
+        running?.Cancellation.Cancel();
     }
 
-    /// <summary>Ids of the tasks this agent is currently running.</summary>
+    /// <summary>Ids of the tasks this agent is currently running: one at most.</summary>
     public IReadOnlyList<string> RunningTasks {
         get {
             lock (gate) {
-                return tasks.Keys.ToList();
+                return current == null ? Array.Empty<string>() : new[] { current.Task.Id };
+            }
+        }
+    }
+
+    /// <summary>Ids of the tasks waiting their turn, in the order they will start.</summary>
+    public IReadOnlyList<string> QueuedTasks {
+        get {
+            lock (gate) {
+                return queue.Select(h => h.Task.Id).ToList();
             }
         }
     }
@@ -681,6 +925,8 @@ public abstract class SiteAgent {
     private async Task CancelAllAsync() {
         List<(TaskHandle Handle, Task Run)> running;
         List<Task> uploads;
+
+        DropQueued("agent stopped");
 
         lock (gate) {
             running = tasks.Values.ToList();
@@ -848,7 +1094,15 @@ public abstract class SiteAgent {
 
         try {
             var http = uploadHttp ??= new HttpClient { Timeout = UploadTimeout };
-            using var sem = new SemaphoreSlim(Math.Max(1, grant.MaxConcurrency));
+            var lanes = Math.Max(1, grant.MaxConcurrency);
+            using var sem = new SemaphoreSlim(lanes);
+
+            if (UploadRateCapBps is { } cap && cap > 0) {
+                // the cap is for the site as a whole: each lane gets its share
+                var perLane = Math.Max(1, cap / lanes);
+                grant = new ImageGrant { Hashes = grant.Hashes, UploadUrl = grant.UploadUrl, Token = grant.Token, ExpiresAt = grant.ExpiresAt, MaxConcurrency = grant.MaxConcurrency, MaxChunk = grant.MaxChunk, RateBps = grant.RateBps is { } r && r > 0 ? Math.Min(r, perLane) : perLane };
+            }
+
             await Task.WhenAll(wanted.Select(h => UploadOneAsync(http, sem, spool, grant, h))).ConfigureAwait(false);
         } finally {
             lock (gate) {
@@ -878,8 +1132,10 @@ public abstract class SiteAgent {
                 UploadResult result;
 
                 try {
+                    await UploadGateAsync(ct).ConfigureAwait(false);
+                    Log(Level.Info, $"image {brief}: uploading {entry.Bytes} bytes{(grant.RateBps is { } r ? $" at ≤{r * 8 / 1e6:0.#} Mbit/s" : string.Empty)}");
                     using var data = spool.Open(entry);
-                    result = await FrameUploader.UploadAsync(http, grant, hash, data, NoteSent, ct).ConfigureAwait(false);
+                    result = await FrameUploader.UploadAsync(http, grant, hash, data, NoteSent, UploadGateAsync, ct).ConfigureAwait(false);
                 } catch (IOException e) {
                     await EventAsync($"image upload: cannot read {brief}: {e.Message}", Level.Warn).ConfigureAwait(false);
                     return;
@@ -911,6 +1167,23 @@ public abstract class SiteAgent {
             }
         } finally {
             sem.Release();
+        }
+    }
+
+    /// <summary>
+    /// Before each chunk: wait until the agent socket is up and has been for <see cref="UploadSettleDelay"/>.
+    /// Telemetry and task reports share the uplink with uploads; when the link is struggling they go first.
+    /// </summary>
+    private async Task UploadGateAsync(CancellationToken ct) {
+        while (true) {
+            await Connected.WaitAsync(ct).ConfigureAwait(false);
+            var settled = connectedSince + UploadSettleDelay.TotalSeconds - Now();
+
+            if (settled <= 0) {
+                return;
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(Math.Min(settled, 5)), ct).ConfigureAwait(false);
         }
     }
 
