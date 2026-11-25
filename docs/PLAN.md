@@ -159,3 +159,53 @@ Test Plugin\` fills, restart, confirm the Running line shows the new commit and 
 
 Not done: rolling back to a previous build (pick an older commit by hand for now), a remote trigger through the
 `sequencer` entity, CI-built packages instead of a local SDK.
+
+# Observation requests: the task queue (2026-11-24)
+
+The service now turns a started request into short, frequent `ObservationTask`s (one slew + one run of exposures,
+two passes queued ahead per instrument; protocol still v6). `SiteAgent` therefore keeps an explicit queue:
+
+- Tasks are queued in arrival order and run strictly one at a time (`current` + `queue`); `plan` reorders the
+  not-yet-started ones (named ids first, the rest keep their relative order), as the virtual agent does.
+- `running` is published when a task actually starts, not at receipt (before, every assigned task was reported
+  running at once and serialised only by `ObservatoryAgent`'s instrument lock).
+- At start, after `AcceptTask`: `constraints.latest` in the past → `skipped`, message `its window had closed`
+  (the exact words of `virtual_agent.rs` and `python/observatory/agent.py`). Never aborts a running task;
+  `earliest` and `min_altitude_deg` are not gated.
+- `task_cancel` of a queued task drops it and reports `cancelled` at once; stop / sequencer idle / agent stop
+  drop the queue as well (`cancelled` / `agent stopped`), matching the virtual agent's `stop`.
+- `RunningTasks` is now the running task only (one at most); `QueuedTasks` lists the rest in start order.
+- Test: `AgentIntegrationTests.TasksRunOneAtATimeInOrderAndAClosedWindowIsSkipped` (four tasks in a second, a
+  `plan` through `POST /api/sites/{id}/plan`, never two `running`, exposures in planned order, late task skipped
+  with no slew).
+
+Not done, pending the owner's word: a filter the wheel does not have still logs a warning and exposes through the
+current filter (`ObservatoryAgent.SelectFilterAsync`); the service's proposal is to fail the task instead. Stacked
+filter wheels (`Exposure.Filters` with several wheels) stay as they are.
+
+# The 2026-11-24 blackout: link hardening
+
+Server-side analysis of the 02:14–03:02 UTC run: telemetry arrived once every ~61 s in stretches of minutes,
+frame announcements and task completions were lost with it, and tasks whose completion was lost were handed over
+again and run again (79 frames taken, 37 received, doubled exposures). Plugin-side reading of the code found a
+mechanism that produces exactly that signature whatever stalls the socket: the publish loop was sample → send →
+sleep, and a send had no timeout, so a stalled socket held the loop until the keep-alive watchdog (20 s ping +
+30 s pong) aborted it; one sample per reconnect cycle, and the missing seconds were never sampled, so no replay
+could fill them. Root cause of the stall not established (server deploy at 02:12 vs. uploads saturating the
+uplink: the first night with frame sharing on, 68 frames in request 2, no rate cap).
+
+Changes in `SiteAgent`:
+- Outbox + sender: `SendAsync` only enqueues (cap `BacklogLimit`); `SendLoopAsync` drains it per session, dequeuing
+  a message only once it is on the wire; after a session `PruneOutbox` keeps StateMsg/Event/ImageCaptured. Hello is
+  sent directly first. `SendTimeout` (15 s) aborts a stalled socket and ends the session with
+  "the socket accepted nothing for 15s (stalled link)". `Pending` = outbox size.
+- `Remember`/`FinishedTask`: the last `FinishedMemory` (500) outcomes; a `task_assign` for a remembered id
+  re-publishes the outcome instead of running (logged "handed over again").
+- Uploads: `UploadRateCapBps` (plugin setting *Upload cap*, 8 Mbit/s default, split across the grant's lanes, min
+  with the grant's `rate_bps`) and `UploadGateAsync` before every chunk (socket up and `UploadSettleDelay` = 10 s
+  settled). `FrameUploader.UploadAsync` gained a `beforeChunk` gate. Upload start is logged with bytes and cap.
+- Logging: session connected (with replay count), closed by the service / ended with reason, both with duration.
+
+To confirm the cause next run: N.I.N.A. log lines `agent socket: session ended after …: …` (a stalled-link reason
+means our side detected the stall; spacing shows the cycle), the spool's `spool.json` on the PC for frames never
+announced, and on the server the image copies' `received` times against the bad stretches.

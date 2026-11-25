@@ -46,7 +46,8 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
-                    <!-- 21 Update from branch -->
+                    <RowDefinition Height="Auto" />
+                    <!-- 22 Update from branch -->
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
@@ -139,37 +140,40 @@
                     <TextBlock Margin="10,0,0,0" Opacity="0.8" TextWrapping="Wrap" VerticalAlignment="Center" Text="Delete the spool's copy once the service holds the frame. The file N.I.N.A. saved is never touched." />
                 </DockPanel>
 
-                <TextBlock Grid.Row="20" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Spool status" />
-                <TextBlock Grid.Row="20" Grid.Column="1" Margin="0,4" Opacity="0.8" TextWrapping="Wrap" VerticalAlignment="Center" Text="{Binding SpoolStatus}" />
+                <TextBlock Grid.Row="20" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Upload cap (Mbit/s)" />
+                <TextBox Grid.Row="20" Grid.Column="1" Margin="0,4" VerticalAlignment="Center" Width="80" HorizontalAlignment="Left" IsEnabled="{Binding ShareFrames}" Text="{Binding UploadRateMbps, UpdateSourceTrigger=LostFocus}" ToolTip="All frame uploads together. Uploads share the uplink with telemetry and task reports, which go first; set this below the site's upstream bandwidth. 0 = no cap." />
+
+                <TextBlock Grid.Row="21" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Spool status" />
+                <TextBlock Grid.Row="21" Grid.Column="1" Margin="0,4" Opacity="0.8" TextWrapping="Wrap" VerticalAlignment="Center" Text="{Binding SpoolStatus}" />
 
                 <!-- ============================ Update from branch ============================ -->
-                <TextBlock Grid.Row="21" Grid.ColumnSpan="2" FontWeight="Bold" Margin="0,16,0,6" Text="Update from branch" />
+                <TextBlock Grid.Row="22" Grid.ColumnSpan="2" FontWeight="Bold" Margin="0,16,0,6" Text="Update from branch" />
 
-                <TextBlock Grid.Row="22" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Running build" />
-                <StackPanel Grid.Row="22" Grid.Column="1" Margin="0,4">
+                <TextBlock Grid.Row="23" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Running build" />
+                <StackPanel Grid.Row="23" Grid.Column="1" Margin="0,4">
                     <TextBlock Opacity="0.8" TextWrapping="Wrap" Text="{Binding Updater.InstalledText, Mode=OneWay}" />
                     <TextBlock Margin="0,4,0,0" Opacity="0.8" TextWrapping="Wrap" Text="Update builds the plugin from a git branch while N.I.N.A. runs and stages it where N.I.N.A. installs plugins from at its next start. Needs git and the .NET SDK on this machine." />
                 </StackPanel>
 
-                <TextBlock Grid.Row="23" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Repository" />
-                <TextBox Grid.Row="23" Grid.Column="1" Margin="0,4" VerticalAlignment="Center" Text="{Binding UpdateRepositoryUrl, UpdateSourceTrigger=LostFocus}" ToolTip="The git URL to build from" />
+                <TextBlock Grid.Row="24" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Repository" />
+                <TextBox Grid.Row="24" Grid.Column="1" Margin="0,4" VerticalAlignment="Center" Text="{Binding UpdateRepositoryUrl, UpdateSourceTrigger=LostFocus}" ToolTip="The git URL to build from" />
 
-                <TextBlock Grid.Row="24" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Branch" />
-                <TextBox Grid.Row="24" Grid.Column="1" Margin="0,4" VerticalAlignment="Center" Width="160" HorizontalAlignment="Left" Text="{Binding UpdateBranch, UpdateSourceTrigger=LostFocus}" ToolTip="dev for N.I.N.A. 3.3, nina-3.2 for 3.2" />
+                <TextBlock Grid.Row="25" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Branch" />
+                <TextBox Grid.Row="25" Grid.Column="1" Margin="0,4" VerticalAlignment="Center" Width="160" HorizontalAlignment="Left" Text="{Binding UpdateBranch, UpdateSourceTrigger=LostFocus}" ToolTip="dev for N.I.N.A. 3.3, nina-3.2 for 3.2" />
 
-                <TextBlock Grid.Row="25" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Source folder (optional)" />
-                <StackPanel Grid.Row="25" Grid.Column="1" Margin="0,4">
+                <TextBlock Grid.Row="26" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Source folder (optional)" />
+                <StackPanel Grid.Row="26" Grid.Column="1" Margin="0,4">
                     <TextBox VerticalAlignment="Center" Text="{Binding UpdateSourceDirectory, UpdateSourceTrigger=LostFocus}" ToolTip="A checkout of your own to build from. Empty: the plugin keeps its own clone under %LOCALAPPDATA%\NINA\ObsServices\src." />
                     <TextBlock Margin="0,4,0,0" Opacity="0.8" TextWrapping="Wrap" Text="{Binding UpdateSourceDescription}" />
                 </StackPanel>
 
-                <TextBlock Grid.Row="26" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Check when connecting" />
-                <DockPanel Grid.Row="26" Grid.Column="1" Margin="0,4">
+                <TextBlock Grid.Row="27" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Check when connecting" />
+                <DockPanel Grid.Row="27" Grid.Column="1" Margin="0,4">
                     <CheckBox DockPanel.Dock="Left" VerticalAlignment="Center" IsChecked="{Binding CheckUpdatesOnConnect}" />
                     <TextBlock Margin="10,0,0,0" Opacity="0.8" TextWrapping="Wrap" VerticalAlignment="Center" Text="Fetch the branch on every connect and report how far behind this build is. Never builds on its own." />
                 </DockPanel>
 
-                <StackPanel Grid.Row="27" Grid.Column="1" Margin="0,8,0,4">
+                <StackPanel Grid.Row="28" Grid.Column="1" Margin="0,8,0,4">
                     <StackPanel Orientation="Horizontal">
                         <Button MinWidth="110" Margin="0,0,8,0" Command="{Binding Updater.CheckCommand}" Content="Check" ToolTip="Fetch the branch and compare with the running build" />
                         <Button MinWidth="110" Margin="0,0,8,0" Command="{Binding Updater.UpdateCommand}" Content="Update" ToolTip="Sync the branch, build, and stage the result for N.I.N.A.'s next start" />

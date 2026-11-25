@@ -11,4 +11,7 @@
     <AssemblyName>ObsServices.Core</AssemblyName>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
   </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="ObsServices.Core.Tests" />
+  </ItemGroup>
 </Project>

@@ -28,7 +28,11 @@ public sealed record UploadResult(UploadStatus Status, int Http, string? Error =
 /// </summary>
 public static class FrameUploader {
     /// <summary>Upload <paramref name="data"/> (seekable) as the frame <paramref name="hash"/>. <paramref name="onChunk"/> is told the bytes of each accepted chunk.</summary>
-    public static async Task<UploadResult> UploadAsync(HttpClient http, ImageGrant grant, string hash, Stream data, Action<long>? onChunk = null, CancellationToken ct = default) {
+    public static Task<UploadResult> UploadAsync(HttpClient http, ImageGrant grant, string hash, Stream data, Action<long>? onChunk = null, CancellationToken ct = default) =>
+        UploadAsync(http, grant, hash, data, onChunk, null, ct);
+
+    /// <param name="beforeChunk">Awaited before every chunk; a host uses it to hold uploads while its link is busy with something more urgent.</param>
+    public static async Task<UploadResult> UploadAsync(HttpClient http, ImageGrant grant, string hash, Stream data, Action<long>? onChunk, Func<CancellationToken, Task>? beforeChunk, CancellationToken ct = default) {
         var url = (grant.UploadUrl.EndsWith('/') ? grant.UploadUrl : grant.UploadUrl + "/") + hash;
         var total = data.Length;
         var maxChunk = (int)Math.Clamp(grant.MaxChunk > 0 ? grant.MaxChunk : Images.MaxChunk, 1, Images.MaxChunk);
@@ -57,6 +61,10 @@ public static class FrameUploader {
             var buffer = new byte[Math.Min(maxChunk, (int)Math.Max(1, Math.Min(total, int.MaxValue)))];
 
             while (offset < total) {
+                if (beforeChunk != null) {
+                    await beforeChunk(ct).ConfigureAwait(false);
+                }
+
                 var n = (int)Math.Min(buffer.Length, total - offset);
                 data.Seek(offset, SeekOrigin.Begin);
                 await ReadExactlyAsync(data, buffer, n, ct).ConfigureAwait(false);

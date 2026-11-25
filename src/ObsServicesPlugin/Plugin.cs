@@ -222,6 +222,24 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
         }
     }
 
+    /// <summary>Takes effect at the next grant.</summary>
+    public double UploadRateMbps {
+        get => Settings.UploadRateMbps;
+        set {
+            Settings.UploadRateMbps = value;
+
+            lock (gate) {
+                if (agent != null) {
+                    agent.UploadRateCapBps = RateCapBps(value);
+                }
+            }
+
+            Raise();
+        }
+    }
+
+    private static long? RateCapBps(double mbps) => mbps <= 0 ? null : (long)(mbps * 1e6 / 8);
+
     /// <summary>Takes effect immediately on the running spool.</summary>
     public bool DeleteOnRelease {
         get => Settings.DeleteOnRelease;
@@ -348,6 +366,7 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
             }
             var a = new NinaSiteAgent(Settings.ServiceUrl, Settings.SiteId, Settings.AgentToken, devices, options, AgentVersion) {
                 StateInterval = TimeSpan.FromSeconds(Settings.StateIntervalSeconds),
+                UploadRateCapBps = RateCapBps(Settings.UploadRateMbps),
             };
             a.Logged += (level, message) => LastMessage = $"{level}: {message}";
 
@@ -453,7 +472,7 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
         Settings = new Settings(profiles, Guid.Parse(Identifier));
         Raise(nameof(Settings));
 
-        foreach (var name in new[] { nameof(ServiceUrl), nameof(SiteId), nameof(AgentToken), nameof(Instrument), nameof(Sequencer), nameof(AllowWholeSequences), nameof(AutoConnect), nameof(TelemetryOnly), nameof(ModeDescription), nameof(StateIntervalSeconds), nameof(RoofOpenJointValue), nameof(ShareFrames), nameof(ShareCalibrationFrames), nameof(ShareSnapshots), nameof(SpoolDirectory), nameof(SpoolCapGb), nameof(DeleteOnRelease), nameof(SpoolStatus), nameof(UpdateRepositoryUrl), nameof(UpdateBranch), nameof(UpdateSourceDirectory), nameof(UpdateSourceDescription), nameof(CheckUpdatesOnConnect) }) {
+        foreach (var name in new[] { nameof(ServiceUrl), nameof(SiteId), nameof(AgentToken), nameof(Instrument), nameof(Sequencer), nameof(AllowWholeSequences), nameof(AutoConnect), nameof(TelemetryOnly), nameof(ModeDescription), nameof(StateIntervalSeconds), nameof(RoofOpenJointValue), nameof(ShareFrames), nameof(ShareCalibrationFrames), nameof(ShareSnapshots), nameof(SpoolDirectory), nameof(SpoolCapGb), nameof(DeleteOnRelease), nameof(UploadRateMbps), nameof(SpoolStatus), nameof(UpdateRepositoryUrl), nameof(UpdateBranch), nameof(UpdateSourceDirectory), nameof(UpdateSourceDescription), nameof(CheckUpdatesOnConnect) }) {
             Raise(name);
         }
 

@@ -114,6 +114,15 @@ public sealed class Settings {
         set => options.SetValueDouble(nameof(SpoolCapGb), Math.Max(0, value));
     }
 
+    /// <summary>
+    /// Cap on frame upload bandwidth, megabits per second, for all uploads together. Uploads share the uplink
+    /// with telemetry and task reports; an unpaced upload of a large frame can starve them. 0 = no cap.
+    /// </summary>
+    public double UploadRateMbps {
+        get => options.GetValueDouble(nameof(UploadRateMbps), 8);
+        set => options.SetValueDouble(nameof(UploadRateMbps), Math.Max(0, value));
+    }
+
     /// <summary>Delete the spool's copy once the service holds the frame. The user's own file is never touched.</summary>
     public bool DeleteOnRelease {
         get => options.GetValueBoolean(nameof(DeleteOnRelease), true);
