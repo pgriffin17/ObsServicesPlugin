@@ -197,6 +197,21 @@ public class ImageTests {
             Assert.That(new FrameSpool(spoolDir).Pending.Select(e => e.Hash), Is.EqualTo(new[] { hash }), "the frame is still in the spool on disk");
             Assert.That(Received(await ServerFixture.GetAsync($"/api/sites/{siteId}/images/{hash}")), Is.False, "and the service does not have it");
 
+            // two more frames the service never heard of: their announcements were lost with the link (or sat in the
+            // outbox when N.I.N.A. restarted). One keeps its stored announcement, the other is from a spool written
+            // before announcements were kept and must be rebuilt from the file
+            var offline = new FrameSpool(spoolDir);
+            var lostFits = Fits.Write(FakeCamera.Synthesize(64, 48, 8), 64, 48, new[] { new FitsCard("EXPTIME", 2.5), new FitsCard("FILTER", "Ha"), new FitsCard("GAIN", 100) });
+            var lost = FrameDescriber.Describe(lostFits, new FrameInfo { Kind = ImageKind.Light, Camera = first.CameraEntity, Instrument = first.Binding.MountEntity, CapturedAt = Timestamp.Now() - 3600, ExposureS = 2.5, Filter = "Ha", Gain = 100 });
+            offline.Add(lost, lostFits);
+            var oldFits = Fits.Write(FakeCamera.Synthesize(64, 48, 9), 64, 48, new[] { new FitsCard("EXPTIME", 4.0), new FitsCard("FILTER", "L") });
+            var old = FrameDescriber.Describe(oldFits, new FrameInfo { Kind = ImageKind.Flat, Camera = first.CameraEntity, CapturedAt = Timestamp.Now() - 7200, ExposureS = 4 });
+            offline.Add(old, oldFits);
+            File.Delete(Path.Combine(spoolDir, old.Hash + ".json"));
+            Assert.That(offline.Announcement(old.Hash)?.Hash, Is.EqualTo(old.Hash), "rebuilt from the file");
+            Assert.That(offline.Announcement(old.Hash)?.ExposureS, Is.EqualTo(4.0), "with the exposure from the header");
+            Assert.That((await ServerFixture.Admin.GetAsync($"/api/sites/{siteId}/images/{lost.Hash}")).IsSuccessStatusCode, Is.False, "the service never saw it");
+
             // the next agent over the same directory lists it after welcome; the service grants it again
             var second = TestAgent.Create(ServerFixture.BaseUrl!, siteId, token, Lat, Lon, spoolDir: spoolDir);
             using var runCts = new CancellationTokenSource();
@@ -205,9 +220,16 @@ public class ImageTests {
             try {
                 await second.Ready.WaitAsync(TimeSpan.FromSeconds(10));
                 await WaitFor(async () => Received(await ServerFixture.GetAsync($"/api/sites/{siteId}/images/{hash}")) ? JsonNode.Parse("{}") : null, TimeSpan.FromSeconds(15), "fetched through the inventory");
+                await WaitFor(async () => Received(await ServerFixture.GetAsync($"/api/sites/{siteId}/images/{lost.Hash}")) ? JsonNode.Parse("{}") : null, TimeSpan.FromSeconds(15), "the lost announcement was made again and the frame fetched");
+                await WaitFor(async () => Received(await ServerFixture.GetAsync($"/api/sites/{siteId}/images/{old.Hash}")) ? JsonNode.Parse("{}") : null, TimeSpan.FromSeconds(15), "the rebuilt announcement too");
                 await WaitUntil(() => second.Spool!.Count == 0, TimeSpan.FromSeconds(10), "and released");
                 var data = await ServerFixture.Admin.GetAsync($"/api/sites/{siteId}/images/{hash}/data.fits");
                 Assert.That(await data.Content.ReadAsByteArrayAsync(), Is.EqualTo(fits));
+                var oldRecord = await ServerFixture.GetAsync($"/api/sites/{siteId}/images/{old.Hash}");
+                Assert.That(oldRecord["kind"]!.GetValue<string>(), Is.EqualTo("flat"));
+                Assert.That(oldRecord["exposure_s"]!.GetValue<double>(), Is.EqualTo(4.0));
+                var events = (await ServerFixture.GetAsync($"/api/sites/{siteId}/state"))["events"]!.AsArray().Select(e => e!["message"]!.GetValue<string>()).ToList();
+                Assert.That(events.Any(m => m.Contains("never saw announced")), Is.True, "the inventory alone could not have fetched them: " + string.Join(" | ", events));
             } finally {
                 second.Stop();
                 runCts.Cancel();

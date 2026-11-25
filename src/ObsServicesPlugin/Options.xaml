@@ -140,8 +140,12 @@
                     <TextBlock Margin="10,0,0,0" Opacity="0.8" TextWrapping="Wrap" VerticalAlignment="Center" Text="Delete the spool's copy once the service holds the frame. The file N.I.N.A. saved is never touched." />
                 </DockPanel>
 
-                <TextBlock Grid.Row="20" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Upload cap (Mbit/s)" />
-                <TextBox Grid.Row="20" Grid.Column="1" Margin="0,4" VerticalAlignment="Center" Width="80" HorizontalAlignment="Left" IsEnabled="{Binding ShareFrames}" Text="{Binding UploadRateMbps, UpdateSourceTrigger=LostFocus}" ToolTip="All frame uploads together. Uploads share the uplink with telemetry and task reports, which go first; set this below the site's upstream bandwidth. 0 = no cap." />
+                <TextBlock Grid.Row="20" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Upload rate" />
+                <DockPanel Grid.Row="20" Grid.Column="1" Margin="0,4" IsEnabled="{Binding ShareFrames}">
+                    <CheckBox DockPanel.Dock="Left" VerticalAlignment="Center" IsChecked="{Binding UploadRateAuto}" />
+                    <TextBox DockPanel.Dock="Right" Width="80" VerticalAlignment="Center" Text="{Binding UploadRateMbps, UpdateSourceTrigger=LostFocus}" ToolTip="Ceiling in Mbit/s for all frame uploads together. 0 = none." />
+                    <TextBlock Margin="10,0,10,0" Opacity="0.8" TextWrapping="Wrap" VerticalAlignment="Center" Text="Learn the rate from the link: slower when sends to the service get slow or stall, faster while they stay quick. Off: the ceiling on the right alone." />
+                </DockPanel>
 
                 <TextBlock Grid.Row="21" Grid.Column="0" Margin="0,4,12,4" VerticalAlignment="Center" Text="Spool status" />
                 <TextBlock Grid.Row="21" Grid.Column="1" Margin="0,4" Opacity="0.8" TextWrapping="Wrap" VerticalAlignment="Center" Text="{Binding SpoolStatus}" />

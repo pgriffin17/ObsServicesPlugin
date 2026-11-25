@@ -220,3 +220,48 @@ its own grant copy, whose `rate_bps` the uploader re-reads per chunk). A later g
 token; one for a hash in flight is ignored. `UploadQueue` lists what waits. Test: `UploadSchedulerTests` (six frames
 spooled newest first, six single-hash grants, a slow fake upload server: never more than two at once, both lanes
 used, the frames that waited went oldest first).
+
+# 2026-11-25: outbox lanes and the learned upload rate
+
+Night of the 24th/25th: N.I.N.A. logged growing batches of "task … was handed over again; it already ended
+completed" at each reconnect. The server applies a task status from any state message (no staleness check), so the
+completions were simply not arriving: the single-FIFO outbox sent the oldest telemetry first and a stalled link that
+takes a few messages per session never reached them; each reconnect appended more re-published outcomes.
+
+- Outbox lanes (`urgent` list, `latestTelemetry`, `telemetry` queue; `PeekOutbound`/`DequeueOutbound`): everything
+  but periodic samples goes first; then the newest sample; then the backlog oldest first. `SendOutcome` keeps one
+  pending outcome per task (`pendingOutcomes`). `OutboxTests` checks the order and the dedupe.
+- `Imaging/UploadRateController`: AIMD on the upload rate. Initial 2 Mbit/s, floor 256 kbit/s, max 1 Gbit/s,
+  `Ceiling` = the user's cap. `OnSend(took)` ≥ 1.5 s → halve (one decrease per 10 s); `OnStall` → halve + 3 min
+  hold; `Tick` once a second: a quiet 30 s window while uploading → ×1.1, or achieved < half the rate → follow
+  achieved ×1.25. Wired in `SiteAgent`: sends are timed in `SendRawAsync` (a slow one is logged as "congested
+  link"), the stall path calls `OnStall`, the publish loop ticks it with `UploadRateBps(30)`, `Changed` retunes the
+  lanes (`EffectiveUploadRateBps`, `UploadRateAuto`, `UploadRateCapBps` = ceiling). Lane `max_chunk` ≈ 2 s at the
+  rate, never above the grant's own (the retune first ignored the grant's `max_chunk`; the scheduler test caught
+  it). `FrameUploader` re-reads `grant.MaxChunk` per chunk.
+- Plugin: `UploadRateAuto` (on), `UploadRateMbps` now a ceiling (default 0 = none), `LearnedUploadRateBps`
+  persisted from `UploadRate.Changed` and restored at connect; the spool status shows "uploads at ≤X Mbit/s
+  (learned)". Options: the Upload rate row is a switch plus the ceiling field.
+- If stalls continue while uploads sit at the floor, bandwidth is ruled out as the cause of the blackout.
+
+# 2026-11-25 (later): the spool desync
+
+Symptom: frames held in the spool, nothing outstanding on the server, no uploads, bandwidth available, after several
+restarts. Cause: the server's `inventory` handler only grants frames it has a record for; frames whose
+`image_captured` was lost (the blackout, or the in-memory outbox at a N.I.N.A. restart) are counted in a warning event
+("spool inventory lists N frames this service never saw announced; they are not fetched") and ignored. Nothing on the
+agent re-announced them.
+
+- `FrameSpool.Insert` stores the announcement as `<hash>.json`; `Announcement(hash)` returns it, or rebuilds one from
+  the file (kind/camera/task/captured_at from the index, EXPTIME/FILTER/GAIN/OFFSET/XBINNING/CCD-TEMP from the header);
+  `Release` deletes the json too.
+- `SiteAgent.ResyncSpoolAsync`: after welcome (with the inventory) and every `SpoolResyncInterval` (10 min) while
+  connected, announce again up to `SpoolResyncBatch` (50) pending frames with no grant pending and no upload under
+  way, oldest first; a frame that cannot be announced (file gone) is dropped from the spool with a warning.
+- Double grants (inventory + re-announce) made the server replace the token mid-upload → 401 → the upload gave up.
+  Now `RunGrantAsync` switches an in-flight lane to the newer token/url/expiry, and a 401 refusal is retried (the
+  lane has the newer token by then) up to `UploadAttempts`.
+- Test: `ImageTests.AFrameLeftInTheSpoolIsFetchedThroughTheInventoryOfTheNextAgent` now also spools two frames the
+  service never saw, one without its stored announcement; both are fetched by the next agent, the rebuilt one with
+  kind and exposure from the header, and the server's "never saw announced" event proves the inventory alone would
+  not have done it. `UploadSchedulerTests` ordering check is per pair of lanes (two lanes freeing together).

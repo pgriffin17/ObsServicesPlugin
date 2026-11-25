@@ -65,7 +65,9 @@ public static class FrameUploader {
                     await beforeChunk(ct).ConfigureAwait(false);
                 }
 
-                var n = (int)Math.Min(buffer.Length, total - offset);
+                // the grant's max_chunk is re-read per chunk: a host retunes it with the rate while the upload runs
+                var chunkNow = (int)Math.Clamp(grant.MaxChunk > 0 ? grant.MaxChunk : buffer.Length, 1, buffer.Length);
+                var n = (int)Math.Min(chunkNow, total - offset);
                 data.Seek(offset, SeekOrigin.Begin);
                 await ReadExactlyAsync(data, buffer, n, ct).ConfigureAwait(false);
                 var started = DateTime.UtcNow;

@@ -127,6 +127,16 @@ public sealed class FrameSpool {
     }
 
     private SpoolEntry Insert(ImageCaptured described, string path, bool owned) {
+        try {
+            // the announcement itself, so a frame the service never heard of (the message lost with the link or a
+            // restart) can be announced again exactly as it was
+            var tmp = AnnouncementPath(described.Hash) + ".tmp";
+            File.WriteAllText(tmp, ProtocolJson.Encode(described));
+            File.Move(tmp, AnnouncementPath(described.Hash), overwrite: true);
+        } catch (IOException) {
+            // the FITS header still allows a re-description
+        }
+
         var entry = new SpoolEntry {
             Hash = described.Hash,
             Bytes = described.Bytes,
@@ -167,8 +177,71 @@ public sealed class FrameSpool {
                 TryDelete(e.Path);
             }
 
+            TryDelete(AnnouncementPath(hash));
             Save();
             return e;
+        }
+    }
+
+    private string AnnouncementPath(string hash) => System.IO.Path.Combine(Directory, hash + ".json");
+
+    /// <summary>
+    /// The announcement for a frame still held, as it was first sent, or rebuilt from the file and the index when the
+    /// stored copy is missing (a spool from before announcements were kept). Null when the file is gone or unreadable.
+    /// </summary>
+    public ImageCaptured? Announcement(string hash) {
+        SpoolEntry? entry;
+
+        lock (gate) {
+            entry = entries.TryGetValue(hash, out var e) ? e : null;
+        }
+
+        if (entry == null) {
+            return null;
+        }
+
+        try {
+            var stored = AnnouncementPath(hash);
+
+            if (File.Exists(stored) && ProtocolJson.DecodeUp(File.ReadAllText(stored)) is ImageCaptured kept && kept.Hash == hash) {
+                return kept;
+            }
+        } catch (Exception) {
+            // fall through to the file
+        }
+
+        try {
+            if (!File.Exists(entry.Path)) {
+                return null;
+            }
+
+            var fits = File.ReadAllBytes(entry.Path);
+            var header = Fits.ParseHeader(fits).Header;
+            var info = new FrameInfo {
+                Kind = entry.Kind,
+                Camera = entry.Camera,
+                TaskId = entry.TaskId,
+                CapturedAt = entry.CapturedAt,
+                FileName = entry.FileName,
+                ExposureS = HeaderNumber(header, "EXPTIME") ?? HeaderNumber(header, "EXPOSURE") ?? 0,
+                Filter = header["FILTER"]?.GetValue<string>(),
+                Gain = HeaderNumber(header, "GAIN"),
+                Offset = HeaderNumber(header, "OFFSET"),
+                Binning = HeaderNumber(header, "XBINNING") is { } b && b >= 1 ? (int)b : null,
+                TemperatureC = HeaderNumber(header, "CCD-TEMP"),
+            };
+            var described = FrameDescriber.Describe(fits, info);
+            return described.Hash == hash ? described : null;
+        } catch (Exception) {
+            return null;
+        }
+    }
+
+    private static double? HeaderNumber(System.Text.Json.Nodes.JsonObject header, string key) {
+        try {
+            return header[key] is System.Text.Json.Nodes.JsonValue v && v.TryGetValue<double>(out var d) && double.IsFinite(d) ? d : null;
+        } catch (Exception) {
+            return null;
         }
     }
 

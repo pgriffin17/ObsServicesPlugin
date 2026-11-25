@@ -240,6 +240,23 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
 
     private static long? RateCapBps(double mbps) => mbps <= 0 ? null : (long)(mbps * 1e6 / 8);
 
+    /// <summary>Takes effect immediately.</summary>
+    public bool UploadRateAuto {
+        get => Settings.UploadRateAuto;
+        set {
+            Settings.UploadRateAuto = value;
+
+            lock (gate) {
+                if (agent != null) {
+                    agent.UploadRateAuto = value;
+                }
+            }
+
+            Raise();
+            Raise(nameof(SpoolStatus));
+        }
+    }
+
     /// <summary>Takes effect immediately on the running spool.</summary>
     public bool DeleteOnRelease {
         get => Settings.DeleteOnRelease;
@@ -281,7 +298,14 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
             var waiting = pending.Count == 0 ? "nothing waiting" : $"{pending.Count} frame(s), {pending.Sum(e => e.Bytes) / 1048576.0:0.#} MB waiting";
             var queue = frameSource.Queued > 0 ? $", {frameSource.Queued} being prepared" : string.Empty;
             var error = frameSource.LastError == null ? string.Empty : $" — last error: {frameSource.LastError}";
-            return $"{frameSource.Announced} announced, {waiting}{queue}, spool at {s.Directory}{error}";
+            NinaSiteAgent? a;
+
+            lock (gate) {
+                a = agent;
+            }
+
+            var rate = a?.EffectiveUploadRateBps is { } bps ? $", uploads at ≤{bps * 8 / 1e6:0.#} Mbit/s{(a.UploadRateAuto ? " (learned)" : string.Empty)}" : ", uploads unpaced";
+            return $"{frameSource.Announced} announced, {waiting}{queue}{rate}, spool at {s.Directory}{error}";
         }
     }
 
@@ -367,6 +391,16 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
             var a = new NinaSiteAgent(Settings.ServiceUrl, Settings.SiteId, Settings.AgentToken, devices, options, AgentVersion) {
                 StateInterval = TimeSpan.FromSeconds(Settings.StateIntervalSeconds),
                 UploadRateCapBps = RateCapBps(Settings.UploadRateMbps),
+                UploadRateAuto = Settings.UploadRateAuto,
+            };
+
+            if (Settings.LearnedUploadRateBps > 0) {
+                a.UploadRate.Reset((long)Settings.LearnedUploadRateBps);
+            }
+
+            a.UploadRate.Changed += bps => {
+                Settings.LearnedUploadRateBps = bps;
+                Raise(nameof(SpoolStatus));
             };
             a.Logged += (level, message) => LastMessage = $"{level}: {message}";
 
@@ -472,7 +506,7 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
         Settings = new Settings(profiles, Guid.Parse(Identifier));
         Raise(nameof(Settings));
 
-        foreach (var name in new[] { nameof(ServiceUrl), nameof(SiteId), nameof(AgentToken), nameof(Instrument), nameof(Sequencer), nameof(AllowWholeSequences), nameof(AutoConnect), nameof(TelemetryOnly), nameof(ModeDescription), nameof(StateIntervalSeconds), nameof(RoofOpenJointValue), nameof(ShareFrames), nameof(ShareCalibrationFrames), nameof(ShareSnapshots), nameof(SpoolDirectory), nameof(SpoolCapGb), nameof(DeleteOnRelease), nameof(UploadRateMbps), nameof(SpoolStatus), nameof(UpdateRepositoryUrl), nameof(UpdateBranch), nameof(UpdateSourceDirectory), nameof(UpdateSourceDescription), nameof(CheckUpdatesOnConnect) }) {
+        foreach (var name in new[] { nameof(ServiceUrl), nameof(SiteId), nameof(AgentToken), nameof(Instrument), nameof(Sequencer), nameof(AllowWholeSequences), nameof(AutoConnect), nameof(TelemetryOnly), nameof(ModeDescription), nameof(StateIntervalSeconds), nameof(RoofOpenJointValue), nameof(ShareFrames), nameof(ShareCalibrationFrames), nameof(ShareSnapshots), nameof(SpoolDirectory), nameof(SpoolCapGb), nameof(DeleteOnRelease), nameof(UploadRateMbps), nameof(UploadRateAuto), nameof(SpoolStatus), nameof(UpdateRepositoryUrl), nameof(UpdateBranch), nameof(UpdateSourceDirectory), nameof(UpdateSourceDescription), nameof(CheckUpdatesOnConnect) }) {
             Raise(name);
         }
 

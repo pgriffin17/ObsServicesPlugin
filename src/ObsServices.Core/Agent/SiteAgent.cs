@@ -21,7 +21,12 @@ public abstract class SiteAgent {
 
     private readonly CancellationTokenSource stopping = new();
     private readonly SemaphoreSlim sendLock = new(1, 1);
-    private readonly Queue<Up> outbox = new();
+    // the outbox: what must be heard first (task outcomes, acks, events, frame announcements), then the
+    // freshest telemetry sample, then the telemetry backlog oldest first; see PeekOutbound
+    private readonly List<Up> urgent = new();
+    private readonly Queue<StateMsg> telemetry = new();
+    private StateMsg? latestTelemetry;
+    private readonly Dictionary<string, StateMsg> pendingOutcomes = new();
     private readonly SemaphoreSlim outboxSignal = new(0, int.MaxValue);
     private readonly Dictionary<string, (ObservationStatus Status, string Message)> finished = new();
     private readonly Queue<string> finishedOrder = new();
@@ -40,6 +45,9 @@ public abstract class SiteAgent {
         BaseUrl = baseUrl.TrimEnd('/');
         SiteId = siteId;
         Token = token;
+        UploadRate.Changed += _ => {
+            lock (gate) RetuneRates();
+        };
     }
 
     // ---- identity and tuning ------------------------------------------------------------------
@@ -82,13 +90,40 @@ public abstract class SiteAgent {
     public int FinishedMemory { get; set; } = 500;
 
     /// <summary>
-    /// Cap on upload bandwidth for all frame uploads together, bytes per second; null = whatever the grant
-    /// allows. Uploads share the uplink with telemetry, and an unpaced upload of a large frame can starve it.
+    /// The user's cap on upload bandwidth for all frame uploads together, bytes per second; null = none.
+    /// Uploads share the uplink with telemetry, and an unpaced upload of a large frame can starve it.
     /// </summary>
-    public long? UploadRateCapBps { get; set; }
+    public long? UploadRateCapBps {
+        get => UploadRate.Ceiling;
+        set => UploadRate.Ceiling = value;
+    }
+
+    /// <summary>
+    /// Learns the upload rate from the socket's own health (slow sends and stalls) while uploads run; on by
+    /// default. Off, uploads use <see cref="UploadRateCapBps"/> alone. The learned rate is
+    /// <see cref="UploadRateController.Current"/>; subscribe to its <c>Changed</c> to remember it.
+    /// </summary>
+    public bool UploadRateAuto { get; set; } = true;
+
+    public UploadRateController UploadRate { get; } = new();
+
+    /// <summary>What uploads may use right now, bytes per second; null = unlimited.</summary>
+    public long? EffectiveUploadRateBps => UploadRateAuto ? UploadRate.Effective : UploadRate.Ceiling is { } c && c > 0 ? c : null;
 
     /// <summary>Uploads wait until the socket has been up this long, so a link that just came back carries telemetry first.</summary>
     public TimeSpan UploadSettleDelay { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// How often, while connected, frames the spool still holds with no upload under way are announced again. The
+    /// service grants or releases each one; a frame it never heard of (the announcement lost with the link or a
+    /// restart) becomes known. Also done right after every welcome.
+    /// </summary>
+    public TimeSpan SpoolResyncInterval { get; set; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>At most this many re-announcements per resync, oldest first.</summary>
+    public int SpoolResyncBatch { get; set; } = 50;
+
+    private double lastResync = double.NegativeInfinity;
 
     /// <summary>Why the last connection attempt or session ended, for status displays. Null while healthy.</summary>
     public string? LastError { get; private set; }
@@ -378,7 +413,7 @@ public abstract class SiteAgent {
         int waiting;
 
         lock (gate) {
-            waiting = outbox.Count;
+            waiting = urgent.Count + telemetry.Count + (latestTelemetry == null ? 0 : 1);
         }
 
         Log(Level.Info, waiting == 0 ? "agent socket: connected" : $"agent socket: connected; replaying {waiting} message(s) the outage swallowed");
@@ -469,9 +504,18 @@ public abstract class SiteAgent {
             try {
                 var state = await StateAsync(ct).ConfigureAwait(false);
                 state = AddUploaderState(state);
+                UploadRate.Tick(Now(), Uploading.Count > 0, UploadRateBps(UploadRate.Window.TotalSeconds));
+
+                if (IsConnected && Now() - lastResync >= SpoolResyncInterval.TotalSeconds) {
+                    await ResyncSpoolAsync().ConfigureAwait(false);
+                }
 
                 if (state != null && state.State.Count > 0) {
-                    await PublishAsync(state).ConfigureAwait(false);
+                    if (state.T == 0) {
+                        state.T = Now();
+                    }
+
+                    EnqueueTelemetry(state);
                 }
             } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
                 return;
@@ -525,37 +569,114 @@ public abstract class SiteAgent {
     /// <summary>
     /// Queue a message for the sender. Never waits on the socket: a stalled or absent link costs the caller
     /// nothing, and the message goes out when the link is back (the kinds the service replays, that is; an
-    /// ack for a session that is gone is dropped with it, see <see cref="PruneOutbox"/>).
+    /// ack for a session that is gone is dropped with it, see <see cref="PruneOutbox"/>). Everything sent
+    /// this way goes ahead of telemetry: when a struggling link only takes a few messages per session, the
+    /// service hears how tasks ended and which frames exist before it hears the history.
     /// </summary>
     private Task SendAsync(Up message) {
         lock (gate) {
-            while (outbox.Count >= BacklogLimit) {
-                outbox.Dequeue();
+            while (urgent.Count >= BacklogLimit) {
+                urgent.RemoveAt(0);
             }
 
-            outbox.Enqueue(message);
+            urgent.Add(message);
         }
 
         outboxSignal.Release();
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// A task's outcome, re-published because the service handed the task over again: one such message per
+    /// task waits at a time; a newer one replaces an older one still unsent.
+    /// </summary>
+    private void SendOutcome(string taskId, StateMsg update) {
+        lock (gate) {
+            if (pendingOutcomes.TryGetValue(taskId, out var old)) {
+                urgent.Remove(old);
+            }
+
+            pendingOutcomes[taskId] = update;
+            urgent.Add(update);
+        }
+
+        outboxSignal.Release();
+    }
+
+    /// <summary>A periodic sample: the newest one goes out ahead of the backlog, so the site's live state is current the moment the link is back.</summary>
+    private void EnqueueTelemetry(StateMsg sample) {
+        lock (gate) {
+            if (latestTelemetry != null) {
+                while (telemetry.Count >= BacklogLimit) {
+                    telemetry.Dequeue();
+                }
+
+                telemetry.Enqueue(latestTelemetry);
+            }
+
+            latestTelemetry = sample;
+        }
+
+        outboxSignal.Release();
+    }
+
     /// <summary>Messages waiting to be sent (the backlog while the link is down).</summary>
     public int Pending {
         get {
-            lock (gate) return outbox.Count;
+            lock (gate) return urgent.Count + telemetry.Count + (latestTelemetry == null ? 0 : 1);
+        }
+    }
+
+    /// <summary>The next message to send, in priority order: urgent, the freshest sample, then the backlog oldest first. Under <see cref="gate"/>.</summary>
+    internal Up? PeekOutbound() {
+        if (urgent.Count > 0) {
+            return urgent[0];
+        }
+
+        if (latestTelemetry != null) {
+            return latestTelemetry;
+        }
+
+        return telemetry.Count > 0 ? telemetry.Peek() : null;
+    }
+
+    /// <summary>Drop <paramref name="sent"/> from whichever lane holds it, once it is on the wire. Under <see cref="gate"/>.</summary>
+    internal void DequeueOutbound(Up sent) {
+        if (urgent.Count > 0 && ReferenceEquals(urgent[0], sent)) {
+            urgent.RemoveAt(0);
+
+            if (sent is StateMsg m) {
+                foreach (var (id, pending) in pendingOutcomes.Where(kv => ReferenceEquals(kv.Value, m)).ToList()) {
+                    pendingOutcomes.Remove(id);
+                }
+            }
+        } else if (ReferenceEquals(latestTelemetry, sent)) {
+            latestTelemetry = null;
+        } else if (telemetry.Count > 0 && ReferenceEquals(telemetry.Peek(), sent)) {
+            telemetry.Dequeue();
+        }
+    }
+
+    /// <summary>For tests: a sample into the telemetry lane, as the publish loop puts it.</summary>
+    internal void EnqueueTelemetryForTest(StateMsg sample) => EnqueueTelemetry(sample);
+
+    /// <summary>For tests: take the next outbound message as the sender would.</summary>
+    internal Up? TakeOutbound() {
+        lock (gate) {
+            var next = PeekOutbound();
+
+            if (next != null) {
+                DequeueOutbound(next);
+            }
+
+            return next;
         }
     }
 
     /// <summary>After a session: keep what the service replays by timestamp, drop what only made sense in that session.</summary>
     private void PruneOutbox() {
         lock (gate) {
-            var keep = outbox.Where(m => m is StateMsg or Event or ImageCaptured).ToList();
-            outbox.Clear();
-
-            foreach (var m in keep) {
-                outbox.Enqueue(m);
-            }
+            urgent.RemoveAll(m => m is not (StateMsg or Event or ImageCaptured));
         }
     }
 
@@ -564,7 +685,7 @@ public abstract class SiteAgent {
             Up? next;
 
             lock (gate) {
-                next = outbox.Count > 0 ? outbox.Peek() : null;
+                next = PeekOutbound();
             }
 
             if (next == null) {
@@ -575,10 +696,8 @@ public abstract class SiteAgent {
             await SendRawAsync(ws, next, ct).ConfigureAwait(false);
 
             lock (gate) {
-                // the head is only dequeued once it is on the wire; a failed send leaves it for the next session
-                if (outbox.Count > 0 && ReferenceEquals(outbox.Peek(), next)) {
-                    outbox.Dequeue();
-                }
+                // a message leaves its lane only once it is on the wire; a failed send leaves it for the next session
+                DequeueOutbound(next);
             }
         }
     }
@@ -591,12 +710,23 @@ public abstract class SiteAgent {
             using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
             limit.CancelAfter(SendTimeout);
 
+            var started = DateTime.UtcNow;
+
             try {
                 await ws.SendAsync(bytes, WebSocketMessageType.Text, true, limit.Token).ConfigureAwait(false);
             } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
                 ws.Abort();
+                UploadRate.OnStall(Now());
                 throw new TimeoutException($"the socket accepted nothing for {SendTimeout.TotalSeconds:0}s (stalled link)");
             }
+
+            var took = DateTime.UtcNow - started;
+
+            if (took >= UploadRate.SlowSend) {
+                Log(Level.Warn, $"agent socket: a {bytes.Length} byte message took {took.TotalSeconds:0.0}s to send (congested link)");
+            }
+
+            UploadRate.OnSend(took, Now());
         } finally {
             sendLock.Release();
         }
@@ -617,8 +747,10 @@ public abstract class SiteAgent {
                 Ready.Set();
 
                 if (Spool != null) {
-                    // what we still hold; the service grants or releases each frame accordingly
+                    // what we still hold; the service grants or releases each frame accordingly, and frames it never
+                    // heard of are announced again
                     await SendInventoryAsync().ConfigureAwait(false);
+                    await ResyncSpoolAsync().ConfigureAwait(false);
                 }
 
                 break;
@@ -707,7 +839,7 @@ public abstract class SiteAgent {
                 // the service never heard how this one ended (the report was lost with the link): tell it
                 // again rather than running the task a second time
                 Log(Level.Info, $"task {task.Id} was handed over again; it already ended {done.Status.AsString()} ({done.Message})");
-                _ = PublishAsync(StateMsg.TaskUpdate(task.Id, done.Status, done.Status == ObservationStatus.Completed ? 1.0 : null, done.Message, Now()));
+                SendOutcome(task.Id, StateMsg.TaskUpdate(task.Id, done.Status, done.Status == ObservationStatus.Completed ? 1.0 : null, done.Message, Now()));
                 return;
             }
 
@@ -1004,6 +1136,48 @@ public abstract class SiteAgent {
         return SendAsync(inventory);
     }
 
+    /// <summary>
+    /// Announce again every frame the spool still holds that has no grant pending and no upload under way, oldest
+    /// first, up to <see cref="SpoolResyncBatch"/>. The service answers each with a grant or a release; one it never
+    /// saw announced (the message was lost with the link, or sat in the outbox when the host restarted) is created
+    /// now. Returns how many were sent.
+    /// </summary>
+    public Task<int> ResyncSpoolAsync() {
+        lastResync = Now();
+        var spool = Spool;
+
+        if (spool == null) {
+            return Task.FromResult(0);
+        }
+
+        List<SpoolEntry> idle;
+
+        lock (gate) {
+            idle = spool.Pending.Where(e => !inFlight.ContainsKey(e.Hash) && !pendingUploads.ContainsKey(e.Hash)).OrderBy(e => e.CapturedAt).Take(Math.Max(0, SpoolResyncBatch)).ToList();
+        }
+
+        var sent = 0;
+
+        foreach (var entry in idle) {
+            var described = spool.Announcement(entry.Hash);
+
+            if (described == null) {
+                Log(Level.Warn, $"spool: {entry.Hash[..12]}… cannot be announced again (file missing or unreadable); dropping it");
+                spool.Release(entry.Hash);
+                continue;
+            }
+
+            SendAsync(described);
+            sent++;
+        }
+
+        if (sent > 0) {
+            Log(Level.Info, $"spool: announced {sent} held frame(s) again so the service can grant or release them");
+        }
+
+        return Task.FromResult(sent);
+    }
+
     /// <summary>Bytes per second uploaded over the last <paramref name="windowSeconds"/>.</summary>
     public double UploadRateBps(double windowSeconds = 60) {
         var cut = Now() - windowSeconds;
@@ -1078,7 +1252,7 @@ public abstract class SiteAgent {
     // ignored (the current token is still good or the upload fails and the inventory asks again).
 
     private readonly Dictionary<string, ImageGrant> pendingUploads = new();
-    private readonly Dictionary<string, (ImageGrant Lane, long? OwnRate)> inFlight = new();
+    private readonly Dictionary<string, (ImageGrant Lane, long? OwnRate, long OwnChunk)> inFlight = new();
 
     /// <summary>Lanes for all uploads together; never more than a grant's own <c>max_concurrency</c>.</summary>
     public int UploadConcurrency { get; set; } = 2;
@@ -1099,9 +1273,19 @@ public abstract class SiteAgent {
 
         lock (gate) {
             foreach (var h in grant.Hashes) {
-                if (spool.Get(h) is { Uploaded: false } && !inFlight.ContainsKey(h)) {
-                    pendingUploads[h] = grant;
+                if (spool.Get(h) is not { Uploaded: false }) {
+                    continue;
                 }
+
+                if (inFlight.TryGetValue(h, out var running)) {
+                    // the service keeps only its newest token for a frame: the upload under way switches to it
+                    running.Lane.Token = grant.Token;
+                    running.Lane.ExpiresAt = grant.ExpiresAt;
+                    running.Lane.UploadUrl = grant.UploadUrl;
+                    continue;
+                }
+
+                pendingUploads[h] = grant;
             }
         }
 
@@ -1140,7 +1324,7 @@ public abstract class SiteAgent {
 
                 // each upload gets its own copy of the grant so its rate can be retuned as lanes fill and empty
                 var lane = new ImageGrant { Hashes = { hash }, UploadUrl = grant.UploadUrl, Token = grant.Token, ExpiresAt = grant.ExpiresAt, MaxConcurrency = grant.MaxConcurrency, MaxChunk = grant.MaxChunk, RateBps = grant.RateBps };
-                inFlight[hash] = (lane, grant.RateBps);
+                inFlight[hash] = (lane, grant.RateBps, grant.MaxChunk > 0 ? Math.Min(grant.MaxChunk, Images.MaxChunk) : Images.MaxChunk);
                 uploading.Add(hash);
                 var run = Task.Run(() => UploadOneAsync(spool, lane, hash), CancellationToken.None);
                 grants.Add(run);
@@ -1160,16 +1344,21 @@ public abstract class SiteAgent {
         }
     }
 
-    /// <summary>The site-wide cap split evenly over what is in flight, never above a grant's own rate. Under <see cref="gate"/>.</summary>
+    /// <summary>
+    /// The site-wide rate split evenly over what is in flight, never above a grant's own rate; chunks sized to
+    /// about two seconds at that rate so pacing and measurement stay fine-grained. Under <see cref="gate"/>.
+    /// </summary>
     private void RetuneRates() {
         if (inFlight.Count == 0) {
             return;
         }
 
-        long? share = UploadRateCapBps is { } cap && cap > 0 ? Math.Max(1, cap / inFlight.Count) : null;
+        long? share = EffectiveUploadRateBps is { } cap && cap > 0 ? Math.Max(1, cap / inFlight.Count) : null;
 
-        foreach (var (lane, own) in inFlight.Values) {
+        foreach (var (lane, own, ownChunk) in inFlight.Values) {
             lane.RateBps = share is { } s ? (own is { } o && o > 0 ? Math.Min(o, s) : s) : own;
+            // never above the grant's own max_chunk (the service answers 413 past it)
+            lane.MaxChunk = lane.RateBps is { } r ? Math.Min(ownChunk, Math.Max(64 * 1024, r * 2)) : ownChunk;
         }
     }
 
@@ -1220,6 +1409,11 @@ public abstract class SiteAgent {
                     case UploadStatus.Missing:
                         await EventAsync($"image upload skipped: the service has no grant for {brief}", Level.Warn).ConfigureAwait(false);
                         break;
+                    case UploadStatus.Refused when result.Http == 401 && attempt < UploadAttempts:
+                        // a newer grant for this frame superseded the token mid-upload; it has reached the lane by now
+                        Log(Level.Info, $"image upload {brief}: token superseded; retrying with the newer grant");
+                        await Task.Delay(TimeSpan.FromSeconds(Math.Min(10, attempt)), ct).ConfigureAwait(false);
+                        continue;
                     default:
                         await EventAsync($"image upload refused: {brief} {result.Error} (HTTP {result.Http})", Level.Warn).ConfigureAwait(false);
                         break;
