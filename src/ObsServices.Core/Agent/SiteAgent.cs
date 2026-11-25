@@ -123,6 +123,12 @@ public abstract class SiteAgent {
     /// <summary>At most this many re-announcements per resync, oldest first.</summary>
     public int SpoolResyncBatch { get; set; } = 50;
 
+    /// <summary>
+    /// The pipeline is fed, not just swept: once every granted frame is uploading or done and a lane is free, the
+    /// next batch of held frames is announced at once, no sooner than this after the last one.
+    /// </summary>
+    public TimeSpan SpoolResyncMinSpacing { get; set; } = TimeSpan.FromSeconds(30);
+
     private double lastResync = double.NegativeInfinity;
 
     /// <summary>Why the last connection attempt or session ended, for status displays. Null while healthy.</summary>
@@ -506,7 +512,7 @@ public abstract class SiteAgent {
                 state = AddUploaderState(state);
                 UploadRate.Tick(Now(), Uploading.Count > 0, UploadRateBps(UploadRate.Window.TotalSeconds));
 
-                if (IsConnected && Now() - lastResync >= SpoolResyncInterval.TotalSeconds) {
+                if (IsConnected && (Now() - lastResync >= SpoolResyncInterval.TotalSeconds || ResyncWouldFeedALane())) {
                     await ResyncSpoolAsync().ConfigureAwait(false);
                 }
 
@@ -1176,6 +1182,23 @@ public abstract class SiteAgent {
         }
 
         return Task.FromResult(sent);
+    }
+
+    /// <summary>True when held frames wait with no grant, nothing is queued for a lane, a lane is free, and the last resync is long enough ago.</summary>
+    private bool ResyncWouldFeedALane() {
+        var spool = Spool;
+
+        if (spool == null || Now() - lastResync < SpoolResyncMinSpacing.TotalSeconds) {
+            return false;
+        }
+
+        lock (gate) {
+            if (pendingUploads.Count > 0 || inFlight.Count >= Math.Max(1, UploadConcurrency)) {
+                return false;
+            }
+        }
+
+        return spool.Pending.Any(e => !inFlight.ContainsKey(e.Hash));
     }
 
     /// <summary>Bytes per second uploaded over the last <paramref name="windowSeconds"/>.</summary>

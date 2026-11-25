@@ -265,3 +265,10 @@ agent re-announced them.
   service never saw, one without its stored announcement; both are fetched by the next agent, the rebuilt one with
   kind and exposure from the header, and the server's "never saw announced" event proves the inventory alone would
   not have done it. `UploadSchedulerTests` ordering check is per pair of lanes (two lanes freeing together).
+
+Follow-up: a disconnect/reconnect "resumed" the drain because only the welcome resync (and the 10 min sweep)
+announced the next batch; between them nothing fed the lanes. `ResyncWouldFeedALane` in the publish loop now
+re-announces the next batch as soon as the grant queue is empty and a lane is free, no sooner than
+`SpoolResyncMinSpacing` (30 s) after the last one; the recovery test runs with a batch of one to prove the feed.
+The spool status reads "N new frame(s) this session, M waiting for upload, K uploading at ≤X Mbit/s" so the
+session counter is not mistaken for the backlog.
