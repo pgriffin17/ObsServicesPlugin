@@ -209,3 +209,14 @@ Changes in `SiteAgent`:
 To confirm the cause next run: N.I.N.A. log lines `agent socket: session ended after …: …` (a stalled-link reason
 means our side detected the stall; spacing shows the cycle), the spool's `spool.json` on the PC for frames never
 announced, and on the server the image copies' `received` times against the bad stretches.
+
+Follow-up (same day): the uploader was neither a stack nor a queue. The server grants one hash per announcement with
+`max_concurrency` 2, and the agent ran every grant as its own two-lane pool, so N announcements meant up to N uploads
+in flight (68 during request 2) and the new cap was split per grant, bounding nothing site-wide. Now one scheduler
+(`pendingUploads` / `inFlight` / `PumpUploads` / `RetuneRates` in `SiteAgent`): every granted hash joins one queue,
+ordered by the spool entry's `CapturedAt`, drained by `UploadConcurrency` (2) lanes, never more than a grant's own
+`max_concurrency`; the cap is divided over what is in flight and retuned as lanes fill and empty (each lane holds
+its own grant copy, whose `rate_bps` the uploader re-reads per chunk). A later grant for a queued hash refreshes its
+token; one for a hash in flight is ignored. `UploadQueue` lists what waits. Test: `UploadSchedulerTests` (six frames
+spooled newest first, six single-hash grants, a slow fake upload server: never more than two at once, both lanes
+used, the frames that waited went oldest first).

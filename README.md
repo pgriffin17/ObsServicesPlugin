@@ -74,9 +74,11 @@ switches. The plugin writes its own plain FITS copy into a **spool** folder (def
 `%LOCALAPPDATA%\NINA\ObsServices\spool`) with N.I.N.A.'s FITS writer, so the user's XISF, TIFF or compressed output
 is untouched and irrelevant; the spool is capped (20 GB by default; only frames the service already received are
 evicted) and survives restarts: the inventory sent after every reconnect lets the service fetch what it missed.
-Uploads share the uplink with telemetry and task reports, which go first: they are capped (*Upload cap*, 8 Mbit/s
-by default for all uploads together, below the grant's own `rate_bps` when the service sets one) and pause at the
-next chunk whenever the agent socket is down, resuming 10 s after it is back. Add an **`uploader`** component to the
+The service grants one frame per announcement; the plugin puts every granted frame into **one site-wide queue**,
+oldest capture first, and uploads at most two at a time however many grants are open. Uploads share the uplink
+with telemetry and task reports, which go first: they are capped (*Upload cap*, 8 Mbit/s by default for all uploads
+together, shared by whatever is in flight and never above the grant's own `rate_bps`) and pause at the next chunk
+whenever the agent socket is down, resuming 10 s after it is back. Add an **`uploader`** component to the
 site's assembly and the plugin publishes the spool to it: frames and bytes waiting, free disk, upload rate, age of
 the oldest frame. Frames taken while a task runs are tagged with it; frames
 taken by hand are announced too. Sharing is off by default and independent of telemetry-only mode: frames only ever
