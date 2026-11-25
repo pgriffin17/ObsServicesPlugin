@@ -214,6 +214,10 @@ public class ImageTests {
 
             // the next agent over the same directory lists it after welcome; the service grants it again
             var second = TestAgent.Create(ServerFixture.BaseUrl!, siteId, token, Lat, Lon, spoolDir: spoolDir);
+            // one frame per resync, fed as soon as the lanes are free: all three must still go without waiting for the periodic sweep
+            second.SpoolResyncBatch = 1;
+            second.SpoolResyncMinSpacing = TimeSpan.FromMilliseconds(500);
+            second.StateInterval = TimeSpan.FromMilliseconds(200);
             using var runCts = new CancellationTokenSource();
             var runner = second.RunAsync(runCts.Token);
 

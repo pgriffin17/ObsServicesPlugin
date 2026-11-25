@@ -295,7 +295,7 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
             }
 
             var pending = s.Pending;
-            var waiting = pending.Count == 0 ? "nothing waiting" : $"{pending.Count} frame(s), {pending.Sum(e => e.Bytes) / 1048576.0:0.#} MB waiting";
+            var waiting = pending.Count == 0 ? "nothing waiting for upload" : $"{pending.Count} frame(s), {pending.Sum(e => e.Bytes) / 1048576.0:0.#} MB waiting for upload";
             var queue = frameSource.Queued > 0 ? $", {frameSource.Queued} being prepared" : string.Empty;
             var error = frameSource.LastError == null ? string.Empty : $" — last error: {frameSource.LastError}";
             NinaSiteAgent? a;
@@ -304,8 +304,9 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
                 a = agent;
             }
 
-            var rate = a?.EffectiveUploadRateBps is { } bps ? $", uploads at ≤{bps * 8 / 1e6:0.#} Mbit/s{(a.UploadRateAuto ? " (learned)" : string.Empty)}" : ", uploads unpaced";
-            return $"{frameSource.Announced} announced, {waiting}{queue}{rate}, spool at {s.Directory}{error}";
+            var uploading = a == null ? string.Empty : a.Uploading.Count == 0 ? ", none uploading" : $", {a.Uploading.Count} uploading";
+            var rate = a?.EffectiveUploadRateBps is { } bps ? $" at ≤{bps * 8 / 1e6:0.#} Mbit/s{(a.UploadRateAuto ? " (learned)" : string.Empty)}" : a == null ? string.Empty : " unpaced";
+            return $"{frameSource.Announced} new frame(s) this session, {waiting}{queue}{uploading}{rate}, spool at {s.Directory}{error}";
         }
     }
 
