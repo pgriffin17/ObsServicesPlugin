@@ -32,7 +32,7 @@ public abstract class SiteAgent {
     private readonly object gate = new();
     private readonly HashSet<string> uploading = new();
     private readonly Queue<(double T, long Bytes)> sent = new();
-    private readonly List<Task> grants = new();
+    private readonly List<Task> grants = new(); // uploads in flight
     private ClientWebSocket? socket;
     private HttpClient? uploadHttp;
 
@@ -1059,7 +1059,7 @@ public abstract class SiteAgent {
     }
 
     private void StartGrant(ImageGrant grant) {
-        var run = Task.Run(async () => {
+        _ = Task.Run(async () => {
             try {
                 await OnImageGrantAsync(grant).ConfigureAwait(false);
             } catch (OperationCanceledException) {
@@ -1067,54 +1067,116 @@ public abstract class SiteAgent {
                 Log(Level.Warn, $"image grant: {e.Message}", e);
             }
         }, CancellationToken.None);
-
-        lock (gate) {
-            grants.Add(run);
-        }
-
-        run.ContinueWith(t => { lock (gate) grants.Remove(t); }, TaskScheduler.Default);
     }
 
-    private async Task RunGrantAsync(ImageGrant grant) {
+    // ---- the upload scheduler ------------------------------------------------------------------
+    //
+    // The service grants one hash per announcement, each grant allowing a couple of lanes. Running every
+    // grant as its own worker pool meant as many uploads in flight as frames announced; instead every granted
+    // hash joins one site-wide queue, oldest capture first, drained by at most UploadConcurrency lanes that
+    // share the rate cap. A later grant for a queued hash refreshes its token; one for a hash in flight is
+    // ignored (the current token is still good or the upload fails and the inventory asks again).
+
+    private readonly Dictionary<string, ImageGrant> pendingUploads = new();
+    private readonly Dictionary<string, (ImageGrant Lane, long? OwnRate)> inFlight = new();
+
+    /// <summary>Lanes for all uploads together; never more than a grant's own <c>max_concurrency</c>.</summary>
+    public int UploadConcurrency { get; set; } = 2;
+
+    /// <summary>Hashes granted and waiting for a lane, in the order they will go.</summary>
+    public IReadOnlyList<string> UploadQueue {
+        get {
+            lock (gate) return OrderedPending().ToList();
+        }
+    }
+
+    private Task RunGrantAsync(ImageGrant grant) {
+        var spool = Spool;
+
+        if (spool == null) {
+            return Task.CompletedTask;
+        }
+
+        lock (gate) {
+            foreach (var h in grant.Hashes) {
+                if (spool.Get(h) is { Uploaded: false } && !inFlight.ContainsKey(h)) {
+                    pendingUploads[h] = grant;
+                }
+            }
+        }
+
+        PumpUploads();
+        return Task.CompletedTask;
+    }
+
+    private IEnumerable<string> OrderedPending() {
+        var spool = Spool;
+        return pendingUploads.Keys.OrderBy(h => spool?.Get(h)?.CapturedAt ?? double.MaxValue).ThenBy(h => h, StringComparer.Ordinal);
+    }
+
+    /// <summary>Start uploads while lanes are free, oldest frame first, and share the rate cap among them.</summary>
+    private void PumpUploads() {
         var spool = Spool;
 
         if (spool == null) {
             return;
         }
 
-        List<string> wanted;
-
         lock (gate) {
-            wanted = grant.Hashes.Where(h => spool.Get(h) is { Uploaded: false } && uploading.Add(h)).ToList();
-        }
+            while (pendingUploads.Count > 0) {
+                var lanes = Math.Max(1, Math.Min(UploadConcurrency, pendingUploads.Values.Concat(inFlight.Values.Select(f => f.Lane)).Min(g => Math.Max(1, g.MaxConcurrency))));
 
-        if (wanted.Count == 0) {
-            return;
-        }
+                if (inFlight.Count >= lanes) {
+                    break;
+                }
 
-        try {
-            var http = uploadHttp ??= new HttpClient { Timeout = UploadTimeout };
-            var lanes = Math.Max(1, grant.MaxConcurrency);
-            using var sem = new SemaphoreSlim(lanes);
+                var hash = OrderedPending().First();
+                var grant = pendingUploads[hash];
+                pendingUploads.Remove(hash);
 
-            if (UploadRateCapBps is { } cap && cap > 0) {
-                // the cap is for the site as a whole: each lane gets its share
-                var perLane = Math.Max(1, cap / lanes);
-                grant = new ImageGrant { Hashes = grant.Hashes, UploadUrl = grant.UploadUrl, Token = grant.Token, ExpiresAt = grant.ExpiresAt, MaxConcurrency = grant.MaxConcurrency, MaxChunk = grant.MaxChunk, RateBps = grant.RateBps is { } r && r > 0 ? Math.Min(r, perLane) : perLane };
+                if (spool.Get(hash) is not { Uploaded: false }) {
+                    continue;
+                }
+
+                // each upload gets its own copy of the grant so its rate can be retuned as lanes fill and empty
+                var lane = new ImageGrant { Hashes = { hash }, UploadUrl = grant.UploadUrl, Token = grant.Token, ExpiresAt = grant.ExpiresAt, MaxConcurrency = grant.MaxConcurrency, MaxChunk = grant.MaxChunk, RateBps = grant.RateBps };
+                inFlight[hash] = (lane, grant.RateBps);
+                uploading.Add(hash);
+                var run = Task.Run(() => UploadOneAsync(spool, lane, hash), CancellationToken.None);
+                grants.Add(run);
+                run.ContinueWith(t => {
+                    lock (gate) {
+                        grants.Remove(t);
+                        inFlight.Remove(hash);
+                        uploading.Remove(hash);
+                        RetuneRates();
+                    }
+
+                    PumpUploads();
+                }, TaskScheduler.Default);
             }
 
-            await Task.WhenAll(wanted.Select(h => UploadOneAsync(http, sem, spool, grant, h))).ConfigureAwait(false);
-        } finally {
-            lock (gate) {
-                uploading.ExceptWith(wanted);
-            }
+            RetuneRates();
         }
     }
 
-    private async Task UploadOneAsync(HttpClient http, SemaphoreSlim sem, FrameSpool spool, ImageGrant grant, string hash) {
+    /// <summary>The site-wide cap split evenly over what is in flight, never above a grant's own rate. Under <see cref="gate"/>.</summary>
+    private void RetuneRates() {
+        if (inFlight.Count == 0) {
+            return;
+        }
+
+        long? share = UploadRateCapBps is { } cap && cap > 0 ? Math.Max(1, cap / inFlight.Count) : null;
+
+        foreach (var (lane, own) in inFlight.Values) {
+            lane.RateBps = share is { } s ? (own is { } o && o > 0 ? Math.Min(o, s) : s) : own;
+        }
+    }
+
+    private async Task UploadOneAsync(FrameSpool spool, ImageGrant grant, string hash) {
         var ct = stopping.Token;
         var brief = hash[..12] + "…";
-        await sem.WaitAsync(ct).ConfigureAwait(false);
+        var http = uploadHttp ??= new HttpClient { Timeout = UploadTimeout };
 
         try {
             for (var attempt = 1; ; attempt++) {
@@ -1165,8 +1227,9 @@ public abstract class SiteAgent {
 
                 return;
             }
-        } finally {
-            sem.Release();
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+        } catch (Exception e) {
+            Log(Level.Warn, $"image upload {brief}: {e.Message}", e);
         }
     }
 
