@@ -73,12 +73,22 @@ and the plugin drops its copy. Lights are shared by default; calibration frames 
 switches. The plugin writes its own plain FITS copy into a **spool** folder (default
 `%LOCALAPPDATA%\NINA\ObsServices\spool`) with N.I.N.A.'s FITS writer, so the user's XISF, TIFF or compressed output
 is untouched and irrelevant; the spool is capped (20 GB by default; only frames the service already received are
-evicted) and survives restarts: the inventory sent after every reconnect lets the service fetch what it missed.
+evicted) and survives restarts. Each frame's announcement is kept next to its file, and after every reconnect, and
+every ten minutes while connected, the agent sends its inventory and **announces again** every held frame with no
+upload under way: the service grants or releases each, and a frame it never heard of (the announcement lost with
+the link, or sitting in the outbox when N.I.N.A. restarted) becomes known then. A spool from before announcements
+were kept is rebuilt from the FITS header. A newer grant for a frame already uploading switches that upload to the
+new token.
 The service grants one frame per announcement; the plugin puts every granted frame into **one site-wide queue**,
 oldest capture first, and uploads at most two at a time however many grants are open. Uploads share the uplink
-with telemetry and task reports, which go first: they are capped (*Upload cap*, 8 Mbit/s by default for all uploads
-together, shared by whatever is in flight and never above the grant's own `rate_bps`) and pause at the next chunk
-whenever the agent socket is down, resuming 10 s after it is back. Add an **`uploader`** component to the
+with telemetry and task reports, which go first. Their rate is **learned from the agent socket's own health**: it
+starts at 2 Mbit/s, grows a tenth every quiet half minute while uploads run, halves whenever a message to the
+service takes over 1.5 s to send, and halves and holds for three minutes after a stall; a link that delivers far
+less than the rate pulls it down to what it gives plus headroom. The learned rate is kept in the profile so a night
+starts where the last one ended; *Upload rate* in the options can turn learning off and set a ceiling in Mbit/s
+instead (or on top). The rate is shared by whatever is in flight, never above a grant's own `rate_bps`, chunks are
+sized to about two seconds at it, and uploads pause at the next chunk whenever the agent socket is down, resuming
+10 s after it is back. Add an **`uploader`** component to the
 site's assembly and the plugin publishes the spool to it: frames and bytes waiting, free disk, upload rate, age of
 the oldest frame. Frames taken while a task runs are tagged with it; frames
 taken by hand are announced too. Sharing is off by default and independent of telemetry-only mode: frames only ever
@@ -110,7 +120,11 @@ closes a half-open connection after 30 s. The reason for the last failure, inclu
 token, is in the plugin's status line and N.I.N.A.'s log, which also records every session's open and close with
 its duration and reason. Nothing that publishes ever waits on the socket: messages go into an outbox that a sender
 drains, so state keeps being sampled once a second through an outage **or a stalled link**, and up to 20,000
-messages are replayed with their original timestamps once the service is back, so the site's history has no gap. A
+messages are replayed with their original timestamps once the service is back, so the site's history has no gap.
+The outbox has lanes: task outcomes, acks, events and frame announcements go first, then the freshest telemetry
+sample so the live state is current at once, then the backlog oldest first; a struggling link that only takes a few
+messages per session spends them on what matters. A task the service hands over again gets one pending outcome
+message, replaced rather than appended. A
 message the socket does not accept within 15 s means the link is stalled (the service stopped reading, or the uplink
 is choked): the socket is abandoned and the message kept for the next session. Running tasks continue locally and
 report their outcome on reconnect; the agent remembers the last 500 outcomes, so a task the service hands over

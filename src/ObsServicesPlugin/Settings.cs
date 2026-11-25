@@ -115,12 +115,24 @@ public sealed class Settings {
     }
 
     /// <summary>
-    /// Cap on frame upload bandwidth, megabits per second, for all uploads together. Uploads share the uplink
-    /// with telemetry and task reports; an unpaced upload of a large frame can starve them. 0 = no cap.
+    /// Ceiling on frame upload bandwidth, megabits per second, for all uploads together. Uploads share the
+    /// uplink with telemetry and task reports; an unpaced upload of a large frame can starve them. 0 = none.
     /// </summary>
     public double UploadRateMbps {
-        get => options.GetValueDouble(nameof(UploadRateMbps), 8);
+        get => options.GetValueDouble(nameof(UploadRateMbps), 0);
         set => options.SetValueDouble(nameof(UploadRateMbps), Math.Max(0, value));
+    }
+
+    /// <summary>Learn the upload rate from the agent socket's health while uploads run (on by default).</summary>
+    public bool UploadRateAuto {
+        get => options.GetValueBoolean(nameof(UploadRateAuto), true);
+        set => options.SetValueBoolean(nameof(UploadRateAuto), value);
+    }
+
+    /// <summary>The rate learned last time, bytes per second, so a night starts where the last one ended. 0 = not yet.</summary>
+    public double LearnedUploadRateBps {
+        get => options.GetValueDouble(nameof(LearnedUploadRateBps), 0);
+        set => options.SetValueDouble(nameof(LearnedUploadRateBps), Math.Max(0, value));
     }
 
     /// <summary>Delete the spool's copy once the service holds the frame. The user's own file is never touched.</summary>

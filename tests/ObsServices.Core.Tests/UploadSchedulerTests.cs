@@ -135,7 +135,6 @@ public class UploadSchedulerTests {
         var spool = agent.Spool!;
         agent.UploadRateCapBps = 200_000_000; // generous: exercises the sharing, slows nothing
         agent.UploadSettleDelay = TimeSpan.Zero;
-        agent.Connected.Set(); // the gate: uploads only run while the agent socket is up
 
         // six frames, spooled newest first so insertion order and capture order disagree
         var frames = new Dictionary<string, byte[]>();
@@ -163,6 +162,8 @@ public class UploadSchedulerTests {
             await agent.InjectAsync(new ImageGrant { Hashes = { hash }, UploadUrl = server.Url, Token = "tcg_t", ExpiresAt = Timestamp.Now() + 3600, MaxConcurrency = 2, MaxChunk = 2880 });
         }
 
+        // the gate opens only now: two lanes were taken by the first two grants, the other four wait in the queue
+        agent.Connected.Set();
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
 
         while (spool.Pending.Count > 0 && DateTime.UtcNow < deadline) {
@@ -176,8 +177,12 @@ public class UploadSchedulerTests {
         Assert.That(server.MaxActive, Is.EqualTo(2), "both lanes were used");
         // the first two grants start as they arrive (nothing older was granted yet); everything that had to wait
         // for a lane went oldest first, whatever order the grants came in
+        // (two lanes freeing together start two frames within milliseconds, whose first chunks may reach the server
+        // in either order, so the comparison is per pair of lanes)
         var firstTwo = server.Started.Take(2).ToList();
-        Assert.That(server.Started.Skip(2), Is.EqualTo(byAge.Where(h => !firstTwo.Contains(h))), "frames that waited for a lane went oldest first");
+        var waited = byAge.Where(h => !firstTwo.Contains(h)).ToList();
+        Assert.That(server.Started.Skip(2).Take(2), Is.EquivalentTo(waited.Take(2)), "the two oldest waiting frames went next");
+        Assert.That(server.Started.Skip(4).Take(2), Is.EquivalentTo(waited.Skip(2).Take(2)), "then the two youngest");
         Assert.That(agent.UploadQueue, Is.Empty);
     }
 }
