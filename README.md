@@ -43,7 +43,8 @@ tests/ObsServicesPlugin.Tests N.I.N.A.-hosted tests; need the Windows desktop ru
    judged only when its turn comes: one whose `constraints.latest` has passed is reported `skipped` with
    `its window had closed` and never moves the hardware (the link may have been down while it waited). A
    task that is already running is never aborted for its window. Stop and the like drop the queue too.
-5. Tasks the service assigns run through N.I.N.A.: open the shutter, unpark, slew (J2000 in, N.I.N.A. transforms),
+5. Tasks the service assigns run through N.I.N.A.: open the shutter, unpark, slew (J2000 in, N.I.N.A. transforms;
+   skipped when the mount already tracks within 1′ of the target, as it does across the short tasks of a request),
    change filter, expose through the imaging mediator and the normal image save pipeline, report frames and
    progress on the task entity. Cancel aborts the exposure. Commands stop, park, unpark, open/close roof and
    safe map to the matching mediator calls; `set_time_scale` is acked as unsupported. Tasks that carry a

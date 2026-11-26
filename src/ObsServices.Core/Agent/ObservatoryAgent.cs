@@ -24,6 +24,13 @@ public sealed class ObservatoryAgentOptions {
     /// <summary>Enable tracking after a slew (mounts usually do this themselves).</summary>
     public bool EnsureTrackingAfterSlew { get; set; } = true;
 
+    /// <summary>
+    /// A task whose target lies within this of where the mount already tracks is not slewed to again: requests hand
+    /// an instrument many short tasks on one target, and a fresh slew per task costs settling time (and a guider
+    /// its lock) for nothing. Arcminutes; 0 slews every time.
+    /// </summary>
+    public double SlewToleranceArcmin { get; set; } = 1.0;
+
     /// <summary>Close the roof when a <c>safe</c> command arrives.</summary>
     public bool CloseRoofOnSafe { get; set; } = true;
 }
@@ -367,12 +374,18 @@ public class ObservatoryAgent : SiteAgent {
                 await mount.UnparkAsync(ct).ConfigureAwait(false);
             }
 
-            await handle.ProgressAsync(0.0, $"slewing to {task.Target.Name}").ConfigureAwait(false);
             CurrentTarget = (task.Target.RaDeg, task.Target.DecDeg);
-            await mount.SlewAsync(task.Target.RaDeg, task.Target.DecDeg, ct).ConfigureAwait(false);
 
-            if (options.EnsureTrackingAfterSlew && mount.Read().State != MountState.Tracking) {
-                await mount.SetTrackingAsync(true, ct).ConfigureAwait(false);
+            if (AlreadyOn(mount.Read(), task.Target.RaDeg, task.Target.DecDeg) is { } offset) {
+                Log(Level.Info, $"task {task.Id}: already on {task.Target.Name} ({offset * 60:0.0}' off), not slewing");
+                await handle.ProgressAsync(0.0, $"already on {task.Target.Name}, not slewing").ConfigureAwait(false);
+            } else {
+                await handle.ProgressAsync(0.0, $"slewing to {task.Target.Name}").ConfigureAwait(false);
+                await mount.SlewAsync(task.Target.RaDeg, task.Target.DecDeg, ct).ConfigureAwait(false);
+
+                if (options.EnsureTrackingAfterSlew && mount.Read().State != MountState.Tracking) {
+                    await mount.SetTrackingAsync(true, ct).ConfigureAwait(false);
+                }
             }
 
             var frames = task.Sequence.SelectMany(e => Enumerable.Repeat(e, Math.Max(0, e.Count))).ToList();
@@ -406,6 +419,16 @@ public class ObservatoryAgent : SiteAgent {
         } finally {
             instrument.Release();
         }
+    }
+
+    /// <summary>The mount's distance from the target, degrees, when it is tracking within <see cref="ObservatoryAgentOptions.SlewToleranceArcmin"/> of it; null when a slew is due.</summary>
+    private double? AlreadyOn(MountReading mount, double raJ2000Deg, double decJ2000Deg) {
+        if (options.SlewToleranceArcmin <= 0 || mount.State != MountState.Tracking || mount.RightAscensionJ2000Deg is not { } ra || mount.DeclinationJ2000Deg is not { } dec) {
+            return null;
+        }
+
+        var off = Astro.SeparationDeg(ra, dec, raJ2000Deg, decJ2000Deg);
+        return off * 60 <= options.SlewToleranceArcmin ? off : null;
     }
 
     /// <summary>A program task: handed to the sequencer host under the same one-instrument lock as a device task.</summary>

@@ -300,3 +300,9 @@ Per the service's request list. `ProtocolJson.Version` = 7.
 To verify on the site (from the service's list): frame cards read "<request> · pass n" without "inferred"; the block
 label counts frames up; a finished pass opens exactly its frames; a mid-task reconnect yields no duplicates, or
 "extra" ones.
+
+Follow-up (2026-11-25): tasks on the target the mount already tracks re-slewed every time, costing settling (and a
+guider its lock) across a request's short tasks. `ObservatoryAgentOptions.SlewToleranceArcmin` (1′; 0 = always slew):
+`RunTaskAsync` reads the mount and, when it is tracking within tolerance of the task's J2000 target, logs "already
+on …, not slewing" and skips the slew (`Astro.SeparationDeg` added). The queue test now expects one slew for three
+Polaris tasks.

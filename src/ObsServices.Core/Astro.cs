@@ -79,4 +79,13 @@ public static class Astro {
     private static double ToRad(double deg) => deg * Math.PI / 180.0;
 
     private static double ToDeg(double rad) => rad * 180.0 / Math.PI;
+
+    /// <summary>Angular separation of two sky positions, degrees (haversine; exact for small and large angles alike).</summary>
+    public static double SeparationDeg(double ra1Deg, double dec1Deg, double ra2Deg, double dec2Deg) {
+        var d2r = Math.PI / 180.0;
+        var dRa = (ra2Deg - ra1Deg) * d2r;
+        var dDec = (dec2Deg - dec1Deg) * d2r;
+        var a = Math.Sin(dDec / 2) * Math.Sin(dDec / 2) + Math.Cos(dec1Deg * d2r) * Math.Cos(dec2Deg * d2r) * Math.Sin(dRa / 2) * Math.Sin(dRa / 2);
+        return 2 * Math.Asin(Math.Min(1, Math.Sqrt(Math.Max(0, a)))) / d2r;
+    }
 }
