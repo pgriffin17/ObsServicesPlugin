@@ -272,3 +272,31 @@ re-announces the next batch as soon as the grant queue is empty and a lane is fr
 `SpoolResyncMinSpacing` (30 s) after the last one; the recovery test runs with a batch of one to prove the feed.
 The spool status reads "N new frame(s) this session, M waiting for upload, K uploading at ≤X Mbit/s" so the
 session counter is not mistaken for the backlog.
+
+# Protocol v7: slots and resumable tasks (2026-11-25)
+
+Per the service's request list. `ProtocolJson.Version` = 7.
+
+- `ImageCaptured.FrameIndex`/`Attempt` (`frame_index`, `attempt`), `FrameInfo` likewise, copied only when `TaskId` is
+  set. `ObservationTask.Have` (`have`, a list of 0-based exposure numbers; absent = empty = take everything).
+- `ExposureRequest.Attempt`; `TaskHandle.Attempt` = starts this agent has seen for the id (bounded memory), or at
+  least 1 when `have` is non-empty (a restart lost the local count, but the service holding frames proves a prior
+  start). Set in `SiteAgent.Pump`.
+- `ObservatoryAgent.RunTaskAsync`: skips `have` indices, reports frames counting from `have.Count`, and with every
+  frame held returns before the roof/unpark/slew. `Complete` no longer infers `task_id` from the single running task.
+- N.I.N.A.: `NinaCamera.ExposeAsync` adds `StringMetaDataHeader OBSTASK`, `IntMetaDataHeader OBSFRAME` and `OBSTRY`
+  to `imageData.MetaData.GenericHeaders` (N.I.N.A.'s FITS/XISF writers emit GenericHeaders, so the spool copy and
+  the user's file both carry them); `NinaFrameSource.SlotOf(meta)` reads them back in the before-save hook. A hand
+  shot has none and is announced without a slot. `FakeCamera` writes the same cards.
+- Graceful stop: `SiteAgent.StopAsync(grace)` cancels running and queued tasks as "agent stopped" while the socket
+  is up, waits (≤3 s) for the outbox to drain, then drops the connection; the plugin's Disconnect uses it. `Stop()`
+  remains the hard stop.
+- Filter not in the wheel: unchanged on purpose. The service now marks such a frame "not as asked" and keeps it;
+  the earlier proposal to fail the task is withdrawn by the service's own list.
+- Tests: `ProtocolTests.SlotsAndHaveAreV7` (note: `task_assign` carries the task's fields at the top level);
+  `AgentIntegrationTests` queue test checks slots/attempt 0 on normal exposures, a `have`=[0,2] task taking only
+  frame 1 as attempt 1, and an all-held task completing with no slew; `NinaFrameSourceTests` slot reading.
+
+To verify on the site (from the service's list): frame cards read "<request> · pass n" without "inferred"; the block
+label counts frames up; a finished pass opens exactly its frames; a mid-task reconnect yields no duplicates, or
+"extra" ones.

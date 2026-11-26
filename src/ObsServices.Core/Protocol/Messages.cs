@@ -353,7 +353,7 @@ public sealed class DownJsonConverter : JsonConverter<Down> {
 /// <summary>Serializer settings shared by every protocol type.</summary>
 public static class ProtocolJson {
     /// <summary>Wire protocol version this library speaks.</summary>
-    public const int Version = 6;
+    public const int Version = 7;
 
     public static readonly JsonSerializerOptions Options = new() {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,

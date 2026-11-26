@@ -39,7 +39,7 @@ public class ProtocolTests {
         var root = doc.RootElement;
 
         Assert.That(root.GetProperty("type").GetString(), Is.EqualTo("hello"));
-        Assert.That(root.GetProperty("protocol").GetInt32(), Is.EqualTo(6));
+        Assert.That(root.GetProperty("protocol").GetInt32(), Is.EqualTo(7));
         Assert.That(root.GetProperty("entities")[0].GetProperty("kind").GetString(), Is.EqualTo("device"));
         Assert.That(root.GetProperty("entities")[0].GetProperty("properties")[0].GetProperty("type").GetString(), Is.EqualTo("number"));
         Assert.That(root.GetProperty("entities")[0].GetProperty("properties")[0].GetProperty("unit").GetString(), Is.EqualTo("C"));
@@ -176,7 +176,7 @@ public class ProtocolTests {
 
         var minimal = (TaskAssign)ProtocolJson.DecodeDown("""{"type":"task_assign","id":"t","name":"n","target":{"name":"x","ra_deg":0,"dec_deg":0},"program":{"id":"p","format":"python.script"}}""");
         Assert.That((minimal.Task.Program!.Revision, minimal.Task.Program.Sha256, minimal.Task.Program.Body), Is.EqualTo((0L, "", (string?)null)));
-        Assert.That(ProtocolJson.Version, Is.EqualTo(6));
+        Assert.That(ProtocolJson.Version, Is.EqualTo(7));
     }
 
     [Test]
@@ -203,7 +203,7 @@ public class ProtocolTests {
         Assert.That(Images.IsHash(new string('A', 64)), Is.False, "lowercase only");
         Assert.That(ImageKindExtensions.ParseImageKind("DARKFLAT"), Is.EqualTo(ImageKind.Dark));
         Assert.That(ImageKindExtensions.ParseImageKind("SNAPSHOT"), Is.EqualTo(ImageKind.Other));
-        Assert.That(ProtocolJson.Version, Is.EqualTo(6));
+        Assert.That(ProtocolJson.Version, Is.EqualTo(7));
     }
 
     [Test]
@@ -253,6 +253,24 @@ public class ProtocolTests {
         Assert.That(Channels.SiteEntityId("oakland"), Is.EqualTo("077a09d4-4235-5f8d-b22c-d1fab8d6d136"));
         Assert.That(Channels.AgentEntityId("oakland"), Is.EqualTo("3601a47d-ef2c-5793-8be0-53035257c6fe"));
         Assert.That(Channels.DeviceEntityId("oakland", "weather"), Is.EqualTo("5e54b3b1-f289-5b0a-88a0-77985a3d924f"));
+    }
+
+    [Test]
+    public void SlotsAndHaveAreV7() {
+        var captured = new ImageCaptured { Hash = new string('a', 64), Bytes = 2880, Kind = ImageKind.Light, Camera = "cam", CapturedAt = 1.7e9, ExposureS = 10, Width = 1, Height = 1, Bitpix = 16, TaskId = "t1", FrameIndex = 3, Attempt = 1 };
+        using var doc = JsonDocument.Parse(ProtocolJson.Encode(captured));
+        Assert.That(doc.RootElement.GetProperty("frame_index").GetInt32(), Is.EqualTo(3));
+        Assert.That(doc.RootElement.GetProperty("attempt").GetInt32(), Is.EqualTo(1));
+
+        var loose = new ImageCaptured { Hash = new string('b', 64), Bytes = 2880, Kind = ImageKind.Flat, Camera = "cam", CapturedAt = 1.7e9, ExposureS = 1, Width = 1, Height = 1, Bitpix = 16 };
+        using var doc2 = JsonDocument.Parse(ProtocolJson.Encode(loose));
+        Assert.That(doc2.RootElement.TryGetProperty("frame_index", out _), Is.False, "a frame not taken for a task carries no slot");
+
+        var assign = ProtocolJson.DecodeDown("""{"type":"task_assign","id":"t1","name":"n","target":{"name":"x","ra_deg":1,"dec_deg":2},"sequence":[{"filter":"L","seconds":5,"count":3}],"have":[0,2]}""");
+        Assert.That(assign, Is.TypeOf<TaskAssign>());
+        Assert.That(((TaskAssign)assign).Task.Have, Is.EqualTo(new[] { 0, 2 }));
+        var plain = ProtocolJson.DecodeDown("""{"type":"task_assign","id":"t2","name":"n","target":{"name":"x","ra_deg":1,"dec_deg":2},"sequence":[{"filter":"L","seconds":5,"count":1}]}""");
+        Assert.That(((TaskAssign)plain).Task.Have, Is.Empty, "absent have means take everything");
     }
 }
 

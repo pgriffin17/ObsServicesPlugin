@@ -22,6 +22,12 @@ public sealed class FrameInfo {
     /// <summary>The task this frame belongs to, when known.</summary>
     public string? TaskId { get; set; }
 
+    /// <summary>Which exposure of <see cref="TaskId"/> this frame is (0-based); null on a frame not taken for a task.</summary>
+    public int? FrameIndex { get; set; }
+
+    /// <summary>Starts of the task before the run that took this frame; null on a frame not taken for a task.</summary>
+    public int? Attempt { get; set; }
+
     /// <summary>Start of the exposure, unix seconds.</summary>
     public double CapturedAt { get; set; }
 
@@ -116,6 +122,8 @@ public static class FrameDescriber {
         Camera = info.Camera ?? string.Empty,
         Instrument = info.Instrument,
         TaskId = info.TaskId,
+        FrameIndex = info.TaskId == null ? null : info.FrameIndex,
+        Attempt = info.TaskId == null ? null : info.Attempt,
         CapturedAt = info.CapturedAt,
         ExposureS = info.ExposureS,
         Filters = new Dictionary<string, string>(info.Filters),

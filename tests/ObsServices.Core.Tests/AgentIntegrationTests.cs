@@ -406,6 +406,36 @@ public class AgentIntegrationTests {
                 Assert.That(agent.Camera.Exposures.Count, Is.EqualTo(exposures), "no new exposure");
                 Assert.That(agent.RunningTasks.Concat(agent.QueuedTasks), Is.Empty);
                 Assert.That(Status(await ServerFixture.GetAsync($"/api/sites/{siteId}/state"), first), Is.EqualTo("completed"));
+
+                // every exposure named its slot and the first attempt
+                Assert.That(agent.Camera.Exposures.Where(e => e.TaskId == first).Select(e => e.FrameIndex), Is.EqualTo(new[] { 0, 1 }));
+                Assert.That(agent.Camera.Exposures.All(e => e.Attempt == 0), Is.True);
+
+                // v7 `have`: a task handed over again with frames the service already holds takes only the others, as attempt 1
+                var partial = new ObservationTask { Id = "re-" + Guid.NewGuid().ToString("N")[..8], Name = "partial", Instrument = mount, Target = new Target { Name = "Polaris", RaDeg = 37.95, DecDeg = 89.26 }, Sequence = { new Exposure { Filter = "L", Seconds = 1, Count = 3 } }, Have = { 0, 2 } };
+                await agent.InjectAsync(new TaskAssign { Task = partial });
+
+                for (var waited = 0; agent.FinishedTask(partial.Id) == null && waited < 200; waited++) {
+                    await Task.Delay(50);
+                }
+
+                Assert.That(agent.FinishedTask(partial.Id)?.Status, Is.EqualTo(ObservationStatus.Completed));
+                var taken = agent.Camera.Exposures.Where(e => e.TaskId == partial.Id).ToList();
+                Assert.That(taken.Select(e => e.FrameIndex), Is.EqualTo(new[] { 1 }), "only the exposure the service lacks");
+                Assert.That(taken[0].Attempt, Is.EqualTo(1), "held frames mean this is not the first start");
+
+                // and with everything held it completes at once, moving nothing
+                var slews = agent.Mount.Calls.Count(c => c.StartsWith("slew"));
+                var full = new ObservationTask { Id = "re-" + Guid.NewGuid().ToString("N")[..8], Name = "full", Instrument = mount, Target = new Target { Name = "Vega", RaDeg = 279.23, DecDeg = 38.78 }, Sequence = { new Exposure { Filter = "L", Seconds = 1, Count = 2 } }, Have = { 0, 1 } };
+                await agent.InjectAsync(new TaskAssign { Task = full });
+
+                for (var waited = 0; agent.FinishedTask(full.Id) == null && waited < 200; waited++) {
+                    await Task.Delay(50);
+                }
+
+                Assert.That(agent.FinishedTask(full.Id)?.Status, Is.EqualTo(ObservationStatus.Completed));
+                Assert.That(agent.Camera.Exposures.Any(e => e.TaskId == full.Id), Is.False);
+                Assert.That(agent.Mount.Calls.Count(c => c.StartsWith("slew")), Is.EqualTo(slews), "no slew for a task with nothing left to take");
             } finally {
                 agent.Stop();
                 runCts.Cancel();

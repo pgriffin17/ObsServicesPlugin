@@ -71,7 +71,9 @@ public sealed record CameraReading(bool Connected, CameraActivity Activity, doub
 }
 
 /// <summary>One frame to take, with the context the host may want to write into the file.</summary>
-public sealed record ExposureRequest(double Seconds, string Filter, string TargetName, double RaJ2000Deg, double DecJ2000Deg, string TaskId, string TaskName, int FrameIndex, int FrameCount);
+/// <param name="FrameIndex">Which exposure of the task this is, 0-based through the sequence with every count expanded; the frame's slot (v7 <c>frame_index</c>).</param>
+/// <param name="Attempt">How many times the task had been started before this run; 0 the first time (v7 <c>attempt</c>).</param>
+public sealed record ExposureRequest(double Seconds, string Filter, string TargetName, double RaJ2000Deg, double DecJ2000Deg, string TaskId, string TaskName, int FrameIndex, int FrameCount, int Attempt = 0);
 
 public interface ICameraDevice {
     CameraReading Read();

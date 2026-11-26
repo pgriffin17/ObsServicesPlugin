@@ -1,6 +1,7 @@
 using System.IO;
 using NINA.Core.Utility;
 using NINA.Image.FileFormat.FITS;
+using NINA.Image.ImageData;
 using NINA.Image.Interfaces;
 using NINA.WPF.Base.Interfaces.Mediator;
 using ObsServices.Core.Imaging;
@@ -96,8 +97,12 @@ public sealed class NinaFrameSource : IDisposable {
             var fits = new FITS(flat, width, height);
             fits.PopulateHeaderCards(meta);
             var start = meta.Image.ExposureStart;
+            var (taskId, frameIndex, attempt) = SlotOf(meta);
             var info = new FrameInfo {
                 Kind = kind,
+                TaskId = taskId,
+                FrameIndex = frameIndex,
+                Attempt = attempt,
                 CapturedAt = UnixSeconds(start),
                 ExposureS = double.IsFinite(meta.Image.ExposureTime) && meta.Image.ExposureTime >= 0 ? meta.Image.ExposureTime : 0,
                 Filter = string.IsNullOrWhiteSpace(meta.FilterWheel.Filter) ? null : meta.FilterWheel.Filter,
@@ -172,6 +177,29 @@ public sealed class NinaFrameSource : IDisposable {
             Logger.Debug($"[ObsServices] N.I.N.A. statistics unavailable for this frame: {e.Message}");
             return null;
         }
+    }
+
+    /// <summary>The slot a task exposure was stamped with in <see cref="NinaCamera.ExposeAsync"/>; all null on a frame the user shot by hand.</summary>
+    public static (string? TaskId, int? FrameIndex, int? Attempt) SlotOf(ImageMetaData meta) {
+        string? task = null;
+        int? frame = null;
+        int? attempt = null;
+
+        foreach (var h in meta.GenericHeaders) {
+            switch (h) {
+                case StringMetaDataHeader s when s.Key == NinaCamera.TaskKey && !string.IsNullOrWhiteSpace(s.Value):
+                    task = s.Value;
+                    break;
+                case IntMetaDataHeader i when i.Key == NinaCamera.FrameKey:
+                    frame = i.Value;
+                    break;
+                case IntMetaDataHeader i when i.Key == NinaCamera.AttemptKey:
+                    attempt = i.Value;
+                    break;
+            }
+        }
+
+        return task == null ? (null, null, null) : (task, frame, attempt ?? 0);
     }
 
     /// <summary>N.I.N.A. stamps exposures with a local <see cref="DateTime"/>; the service wants unix seconds.</summary>

@@ -30,6 +30,9 @@ public abstract class SiteAgent {
     private readonly SemaphoreSlim outboxSignal = new(0, int.MaxValue);
     private readonly Dictionary<string, (ObservationStatus Status, string Message)> finished = new();
     private readonly Queue<string> finishedOrder = new();
+    private readonly Dictionary<string, int> starts = new();
+    private readonly Queue<string> startsOrder = new();
+    private volatile bool stopRequested;
     private double connectedSince;
     private readonly Dictionary<string, (TaskHandle Handle, Task Run)> tasks = new();
     private readonly List<TaskHandle> queue = new();
@@ -376,9 +379,27 @@ public abstract class SiteAgent {
     }
 
     /// <summary>Ask <see cref="RunAsync"/> to return. Running tasks see their <see cref="TaskHandle.Cancelled"/> fire.</summary>
+    /// <summary>Ask <see cref="RunAsync"/> to return now. Prefer <see cref="StopAsync"/>, which lets the final task statuses leave first.</summary>
     public void Stop() => stopping.Cancel();
 
-    public bool IsStopping => stopping.IsCancellationRequested;
+    /// <summary>
+    /// Stop gracefully: running and queued tasks are cancelled with "agent stopped" while the socket is still up,
+    /// the outbox is given <paramref name="grace"/> to drain, then the connection is dropped. A status that leaves
+    /// now is one the service need not hand the task over again for.
+    /// </summary>
+    public async Task StopAsync(TimeSpan? grace = null) {
+        stopRequested = true;
+        CancelRunningTasks();
+        var deadline = DateTime.UtcNow + (grace ?? TimeSpan.FromSeconds(3));
+
+        while (DateTime.UtcNow < deadline && IsConnected && (Pending > 0 || RunningTasks.Count > 0)) {
+            await Task.Delay(50).ConfigureAwait(false);
+        }
+
+        stopping.Cancel();
+    }
+
+    public bool IsStopping => stopRequested || stopping.IsCancellationRequested;
 
     private static string Describe(TimeSpan d) => d.TotalSeconds < 90 ? $"{d.TotalSeconds:0}s" : $"{d.TotalMinutes:0.#}min";
 
@@ -891,6 +912,19 @@ public abstract class SiteAgent {
             next = queue[0];
             queue.RemoveAt(0);
             current = next;
+            // the attempt: starts this agent has seen, or at least one when the service already holds frames of it
+            starts.TryGetValue(next.Task.Id, out var before);
+            next.Attempt = Math.Max(before, next.Task.Have.Count > 0 ? 1 : 0);
+
+            if (before == 0) {
+                startsOrder.Enqueue(next.Task.Id);
+
+                while (startsOrder.Count > Math.Max(1, FinishedMemory)) {
+                    starts.Remove(startsOrder.Dequeue());
+                }
+            }
+
+            starts[next.Task.Id] = before + 1;
             var run = Task.Run(() => RunTaskWrapperAsync(next), CancellationToken.None);
             tasks[next.Task.Id] = (next, run);
         }
@@ -1015,7 +1049,7 @@ public abstract class SiteAgent {
 
             (status, message) = handle.IsCancelled ? (ObservationStatus.Cancelled, "cancelled") : (ObservationStatus.Completed, "done");
         } catch (OperationCanceledException) when (handle.IsCancelled) {
-            (status, message) = (ObservationStatus.Cancelled, stopping.IsCancellationRequested ? "agent stopped" : "cancelled");
+            (status, message) = (ObservationStatus.Cancelled, IsStopping ? "agent stopped" : "cancelled");
         } catch (NotSupportedException e) {
             (status, message) = (ObservationStatus.Skipped, e.Message);
         } catch (Exception e) {
