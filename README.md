@@ -166,6 +166,10 @@ Run `dotnet test` for metadata, composition and selected feature tests. WPF test
 
 Copy local.props.example to the ignored local.props and set NinaExecutable to your NINA installation. Close NINA before running the DeployPlugin target on the project under src. Normal builds do not deploy.
 
+To build on Windows, from the root directory, run:
+
+`dotnet build .\src\ObsServicesPlugin\ObsServicesPlugin.csproj -c Release -t:DeployPlugin`
+
 ## Selected examples
 
 This project starts with the manifest and lifecycle skeleton. Generate a scratch project with feature switches to try the examples.
