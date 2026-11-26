@@ -98,6 +98,12 @@ public sealed class ImageCaptured : Up {
 
     public string? TaskId { get; set; }
 
+    /// <summary>Which exposure of the task this frame is for: 0-based through the task's sequence with every count expanded (v7). Absent on a frame not taken for a task.</summary>
+    public int? FrameIndex { get; set; }
+
+    /// <summary>How many times the task had been started before the run that took this frame; 0 the first time (v7).</summary>
+    public int? Attempt { get; set; }
+
     /// <summary>Start of the exposure, unix seconds.</summary>
     public double CapturedAt { get; set; }
 

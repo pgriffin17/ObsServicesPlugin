@@ -306,12 +306,8 @@ public class ObservatoryAgent : SiteAgent {
         var b = Binding;
         info.Camera ??= CameraEntity ?? throw new InvalidOperationException("no camera entity to announce frames from (the agent is not bound to an instrument)");
         info.Instrument ??= b.MountEntity;
-
-        if (info.TaskId == null) {
-            // frames taken while exactly one task runs belong to it (device tasks hold the instrument lock; programs too)
-            var running = RunningTasks;
-            info.TaskId = running.Count == 1 ? running[0] : null;
-        }
+        // the task is the host's to name, from the exposure it made (v7 slots); a frame it does not attribute stays
+        // unattributed rather than guessed from whatever task happens to be running
 
         if (info.Filters.Count == 0 && b.FilterWheelEntity != null) {
             var filter = info.Filter ?? devices.FilterWheel?.CurrentFilter;
@@ -346,6 +342,13 @@ public class ObservatoryAgent : SiteAgent {
             throw new InvalidOperationException($"task is for instrument {task.Instrument}; this agent drives {Binding.InstrumentId}");
         }
 
+        if (task.TotalFrames > 0 && Enumerable.Range(0, task.TotalFrames).All(task.Have.Contains)) {
+            // handed over again and the service holds every frame: nothing to take, nothing to move
+            await handle.EventAsync($"{task.Name}: the service holds every frame already").ConfigureAwait(false);
+            await handle.FramesAsync(task.TotalFrames, task.TotalFrames).ConfigureAwait(false);
+            return;
+        }
+
         await instrument.WaitAsync(ct).ConfigureAwait(false);
 
         try {
@@ -373,20 +376,32 @@ public class ObservatoryAgent : SiteAgent {
             }
 
             var frames = task.Sequence.SelectMany(e => Enumerable.Repeat(e, Math.Max(0, e.Count))).ToList();
-            var total = Math.Max(task.TotalExposureSeconds, double.Epsilon);
+            // the service already holds these (the task was handed over again): take only the others
+            var have = task.Have.Where(i => i >= 0 && i < frames.Count).ToHashSet();
+            var total = Math.Max(frames.Where((_, i) => !have.Contains(i)).Sum(f => f.Seconds), double.Epsilon);
             var done = 0.0;
-            await handle.FramesAsync(0, frames.Count).ConfigureAwait(false);
+            var taken = have.Count;
+            await handle.FramesAsync(taken, frames.Count).ConfigureAwait(false);
+
+            if (have.Count > 0) {
+                await handle.EventAsync($"{task.Name}: the service holds {have.Count} of {frames.Count} frames; taking the rest").ConfigureAwait(false);
+            }
 
             for (var i = 0; i < frames.Count; i++) {
+                if (have.Contains(i)) {
+                    continue;
+                }
+
                 ct.ThrowIfCancellationRequested();
                 var frame = frames[i];
                 await SelectFilterAsync(handle, frame.FilterFor(Binding.FilterWheelEntity), ct).ConfigureAwait(false);
                 await handle.ProgressAsync(done / total, $"exposing {frame.Filter} {frame.Seconds:0.#}s ({i + 1}/{frames.Count})").ConfigureAwait(false);
-                var request = new ExposureRequest(frame.Seconds, frame.Filter, task.Target.Name, task.Target.RaDeg, task.Target.DecDeg, task.Id, task.Name, i, frames.Count);
+                var request = new ExposureRequest(frame.Seconds, frame.Filter, task.Target.Name, task.Target.RaDeg, task.Target.DecDeg, task.Id, task.Name, i, frames.Count, handle.Attempt);
                 await camera.ExposeAsync(request, ct).ConfigureAwait(false);
                 done += frame.Seconds;
-                await handle.FramesAsync(i + 1, frames.Count).ConfigureAwait(false);
-                await handle.ProgressAsync(done / total, $"{i + 1}/{frames.Count} exposures").ConfigureAwait(false);
+                taken++;
+                await handle.FramesAsync(taken, frames.Count).ConfigureAwait(false);
+                await handle.ProgressAsync(done / total, $"{taken}/{frames.Count} exposures").ConfigureAwait(false);
             }
         } finally {
             instrument.Release();

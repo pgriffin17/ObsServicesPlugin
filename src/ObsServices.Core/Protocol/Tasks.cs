@@ -176,6 +176,12 @@ public sealed class ObservationTask {
 
     public string? Notes { get; set; }
 
+    /// <summary>
+    /// Exposures (0-based, through the sequence with every count expanded) the service already holds frames for; set
+    /// when a task is handed over again after a reconnect (v7). The agent takes only the others. Empty = take everything.
+    /// </summary>
+    public List<int> Have { get; set; } = new();
+
     public ProgramRef? Program { get; set; }
 
     /// <summary>The capability an agent needs to run this task, when it is a program.</summary>

@@ -61,7 +61,7 @@ item, installed plugin assemblies, and the telemetry-only switch, which the serv
 `set` also slews the mount (`ra_deg`/`dec_deg`), parks or stops it (`mode`), changes filter and focus, and
 opens or closes the roof; the agent declares exactly those as writable. See `docs/PLAN.md`.
 
-## Frames (protocol v6)
+## Frames (protocol v6, slots in v7)
 
 With *Share the frames N.I.N.A. saves with the service* ticked, every frame N.I.N.A. saves is **announced** to the
 service: its pixel hash (SHA-256 of the pixels as 32-bit floats, the same name the service and Fits_Utils use),
@@ -90,8 +90,15 @@ instead (or on top). The rate is shared by whatever is in flight, never above a 
 sized to about two seconds at it, and uploads pause at the next chunk whenever the agent socket is down, resuming
 10 s after it is back. Add an **`uploader`** component to the
 site's assembly and the plugin publishes the spool to it: frames and bytes waiting, free disk, upload rate, age of
-the oldest frame. Frames taken while a task runs are tagged with it; frames
-taken by hand are announced too. Sharing is off by default and independent of telemetry-only mode: frames only ever
+the oldest frame. A frame taken for a task names its **slot** (v7): `task_id`,
+`frame_index` (which exposure of the task, 0-based through the sequence with every count expanded) and `attempt`
+(starts of the task before that run), stamped on the exposure in N.I.N.A.'s metadata so they survive its asynchronous
+save pipeline and land in every header it writes as `OBSTASK`, `OBSFRAME` and `OBSTRY`. The service counts a task's
+progress from these and marks a frame that does not fit what it asked for (wrong exposure, filter or time, or a
+second frame for a slot) as "not as asked" or "extra", keeping it. Frames taken by hand are announced too, without a
+slot; nothing is ever guessed from which task happens to be running. A task handed over again after a reconnect may
+carry `have`, the exposures the service already holds: only the others are taken, and with everything held the task
+completes at once without moving anything. Sharing is off by default and independent of telemetry-only mode: frames only ever
 leave the machine, so the mode does not gate them.
 
 ## Updating from a branch
@@ -128,7 +135,8 @@ message, replaced rather than appended. A
 message the socket does not accept within 15 s means the link is stalled (the service stopped reading, or the uplink
 is choked): the socket is abandoned and the message kept for the next session. Running tasks continue locally and
 report their outcome on reconnect; the agent remembers the last 500 outcomes, so a task the service hands over
-again because its report was lost is answered with the stored result, never run twice.
+again because its report was lost is answered with the stored result, never run twice. Disconnecting in the plugin
+stops gracefully: tasks are cancelled as "agent stopped" and those statuses leave before the socket is dropped.
 
 ## Develop on Linux
 

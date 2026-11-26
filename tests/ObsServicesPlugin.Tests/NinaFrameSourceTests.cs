@@ -42,5 +42,18 @@ namespace ObsServicesPlugin.Tests {
             Assert.That(ImageKindExtensions.ParseImageKind("SNAPSHOT"), Is.EqualTo(ImageKind.Other));
             Assert.That(ImageKindExtensions.ParseImageKind(null), Is.EqualTo(ImageKind.Other));
         }
+    
+        [Test]
+        public void ReadsTheSlotStampedOnATaskExposureAndNothingOnAHandShot() {
+            var meta = new NINA.Image.ImageData.ImageMetaData();
+            Assert.That(NinaFrameSource.SlotOf(meta), Is.EqualTo(((string?)null, (int?)null, (int?)null)), "a frame the user shot by hand");
+
+            meta.GenericHeaders.Add(new NINA.Image.ImageData.StringMetaDataHeader(NinaCamera.TaskKey, "task-1"));
+            meta.GenericHeaders.Add(new NINA.Image.ImageData.IntMetaDataHeader(NinaCamera.FrameKey, 4));
+            Assert.That(NinaFrameSource.SlotOf(meta), Is.EqualTo(("task-1", (int?)4, (int?)0)), "no attempt header means the first start");
+
+            meta.GenericHeaders.Add(new NINA.Image.ImageData.IntMetaDataHeader(NinaCamera.AttemptKey, 2));
+            Assert.That(NinaFrameSource.SlotOf(meta), Is.EqualTo(("task-1", (int?)4, (int?)2)));
+        }
     }
 }

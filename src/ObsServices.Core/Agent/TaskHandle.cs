@@ -18,6 +18,9 @@ public sealed class TaskHandle {
 
     public ObservationTask Task { get; }
 
+    /// <summary>How many times this task had been started (by this agent, or by anyone when the service says it already holds frames) before this run.</summary>
+    public int Attempt { get; internal set; }
+
     /// <summary>Fires when the service cancels the task or the agent stops. Honour it promptly.</summary>
     public CancellationToken Cancelled => Cancellation.Token;
 

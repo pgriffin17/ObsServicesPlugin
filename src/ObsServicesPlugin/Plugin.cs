@@ -441,9 +441,19 @@ public sealed class Plugin : PluginBase, INotifyPropertyChanged {
     public async Task DisconnectAsync() {
         Task? running;
 
+        NinaSiteAgent? stopping;
+
         lock (gate) {
             running = runner;
-            agent?.Stop();
+            stopping = agent;
+        }
+
+        if (stopping != null) {
+            // final task statuses leave while the socket is still up, so the service need not hand them over again
+            await stopping.StopAsync(TimeSpan.FromSeconds(3));
+        }
+
+        lock (gate) {
             runCts?.Cancel();
         }
 

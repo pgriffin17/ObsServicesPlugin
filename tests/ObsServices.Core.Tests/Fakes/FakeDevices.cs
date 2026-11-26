@@ -241,6 +241,8 @@ public sealed class FakeCamera : ICameraDevice {
                     new FitsCard("OFFSET", 50),
                     new FitsCard("XBINNING", 1),
                     new FitsCard("CCD-TEMP", -10.0),
+                    new FitsCard("OBSTASK", request.TaskId, "observatory service task"),
+                    new FitsCard("OBSFRAME", request.FrameIndex, "exposure number within the task, 0-based"),
                 });
                 var info = new FrameInfo {
                     Kind = ImageKind.Light,
@@ -248,6 +250,8 @@ public sealed class FakeCamera : ICameraDevice {
                     ExposureS = request.Seconds,
                     Filter = request.Filter,
                     TaskId = request.TaskId,
+                    FrameIndex = request.FrameIndex,
+                    Attempt = request.Attempt,
                     Gain = 100,
                     Offset = 50,
                     Binning = 1,
