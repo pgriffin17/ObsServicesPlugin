@@ -392,7 +392,8 @@ public class AgentIntegrationTests {
 
                 // the late task never moved the hardware; the others ran strictly in turn, in the planned order
                 Assert.That(agent.Camera.Exposures.Select(e => e.TaskId), Is.EqualTo(new[] { first, first, third, second, second }));
-                Assert.That(agent.Mount.Calls.Count(c => c.StartsWith("slew")), Is.EqualTo(3), "one slew per task that ran");
+                Assert.That(agent.Mount.Calls.Count(c => c.StartsWith("slew")), Is.EqualTo(1), "one slew: the second and third tasks found the mount already tracking Polaris");
+                Assert.That(agent.Logged.Count(m => m.Contains("already on Polaris")), Is.EqualTo(2), "and said so for each");
                 Assert.That(started.Take(1), Is.EqualTo(new[] { first }));
                 Assert.That(started.Skip(1).Where(id => id == third || id == second), Is.EqualTo(new[] { third, second }), "the plan put third before second");
                 Assert.That(agent.QueuedTasks, Is.Empty);
